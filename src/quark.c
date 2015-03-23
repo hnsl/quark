@@ -14,9 +14,6 @@
 /// Smallest possible allocation size.
 #define QK_PAGE_SIZE_2E 12
 
-#define QK_ALLOC_ALIGN_BITS (4)
-#define QK_ALLOC_ALIGN (1 << QK_ALLOC_ALIGN_BITS)
-
 typedef struct qk_block_index {
     struct qk_block_index* next;
     uint8_t pages_2e;
