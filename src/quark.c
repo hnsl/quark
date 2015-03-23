@@ -171,13 +171,12 @@ fiber_main_t(quark) qk_fiber(fiber_main_attr, acid_h* ah) { try {
     } else if (ctx.header->magic == QK_HEADER_MAGIC) {
         // We are opening an existing database;
         if (ctx.header->version != QK_VERSION) {
-            // Can't open any other version than current.
+            throw_eio("bad database version", quark);
         }
         ctx.header->session += 1;
     } else {
         // This is not a valid database or empty acid memory range.
-        /*throw_eio( */
-        return;
+        throw_eio("corrupt or invalid database", quark);
     }
     acid_fsync(ah);
     auto_accept_join(qk_free,

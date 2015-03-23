@@ -7,6 +7,8 @@ typedef struct qk_ctx qk_ctx_t;
 
 decl_fid_t(quark);
 
+define_eio(quark);
+
 sf(quark)* qk_init(acid_h* ah);
 
 
