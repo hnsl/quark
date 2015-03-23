@@ -1,0 +1,37 @@
+{
+    "preprocessor": "rcd-pp",
+    "compiler": "rcd-i2o",
+    "project-linker": "rcd-pl",
+    "dependencies": [
+        "librcd"
+    ],
+    "library": "static",
+    "general-flags": [
+        "-g",
+        "-Werror"
+    ],
+    "build-masks": {
+        "debug": {
+            "output": "quark.debug.a",
+            "pp-flags": [
+                "-DDEBUG"
+            ]
+        },
+        "release": {
+            "output": "quark.a",
+            "o-flags": ["-O1"],
+            "o-env": {
+                "LLC_ARGS": "-O1"
+            }
+        },
+        "test": {
+            "output": "quark.test",
+            "library": "",
+            "dependency-build-mask": "debug",
+            "additional-src-dirs": ["tests"],
+            "pp-flags": [
+                "-DDEBUG"
+            ]
+        }
+    }
+}
