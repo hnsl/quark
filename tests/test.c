@@ -44,10 +44,32 @@ static void test1(fstr_t data_file, fstr_t journal_file) {
     }
 }
 
+static void test2(fstr_t data_file, fstr_t journal_file) {
+    DBG("Testing b-skip-list");
+    sub_heap {
+        acid_h* ah = acid_open(data_file, journal_file, ACID_ADDR_0, 0);
+        sf(quark)* sf = qk_init(ah);
+        uint128_t qfid = quark_sf2id(sf).fid;
+        qk_push(sf, "a", "AAAAAAAAAAAAAAA");
+        qk_bls_print(sf);
+        qk_push(sf, "b", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+        qk_bls_print(sf);
+        qk_push(sf, "c", "CCCCCCCCCCCCCCCCCCCCCCC");
+        qk_bls_print(sf);
+        qk_push(sf, "5", fss(fstr_hexrandom(10000)));
+        qk_bls_print(sf);
+        qk_push(sf, "6", fss(fstr_hexrandom(10000)));
+        qk_bls_print(sf);
+        acid_fsync(ah);
+        acid_fsync(ah);
+    }
+}
+
 void rcd_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
     fstr_t data_file = concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64(), ".data");
     fstr_t journal_file = concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64(), ".jrnl");
-    test0(data_file, journal_file);
-    test1(data_file, journal_file);
+//    test0(data_file, journal_file);
+//    test1(data_file, journal_file);
+    test2(data_file, journal_file);
     exit(0);
 }
