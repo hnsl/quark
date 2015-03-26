@@ -106,7 +106,7 @@ static size_t qk_pages_2e_to_bytes(uint8_t pages_2e) {
 }
 
 static void qk_dprint_free_list(qk_ctx_t* ctx) { sub_heap {
-    DBG("Free lists contains:");
+    //DBG("Free lists contains:");
     for (size_t i = 0; i < 32; i++) {
         fstr_t line = concs("free_list[", i, "]: ");
         qk_block_index_t* next = ctx->header->free_list[i];
@@ -114,7 +114,7 @@ static void qk_dprint_free_list(qk_ctx_t* ctx) { sub_heap {
             line = concs(line, "->[", next->pages_2e, "]");
             next = next->next;
         }
-        DBG(line, "-> [\\0]");
+        //DBG(line, "-> [\\0]");
     }
     acid_fsync(ctx->ah);
 }}
@@ -203,14 +203,15 @@ static uint64_t qk_geornd(double p) {
     if (p == 1) {
         return 1;
     } else {
-        double ent = (double) UINT64_MAX / lwt_rdrand64();
-        return (uint64_t) (log(ent) / log((1 - p) + 1));
+        double ent = (double)lwt_rdrand64() / UINT64_MAX;
+        //DBGFN(ent);
+        return (uint64_t) (log(ent) / log(1 - p) + 1);
     }
 }
 
 static inline uint8_t qk_bsl_level() {
     // p = (1 - (1 / gamma))
-    return qk_geornd((double) 1 - ((double) 1 / QK_BSL_GAMMA));
+    return qk_geornd( (double) 1 - (double) 1 / QK_BSL_GAMMA);
 }
 
 static inline uint64_t qk_bsl_part_size() {
@@ -226,7 +227,7 @@ static void qk_bsl_print_state(qk_ctx_t* ctx) {
             list_push_end(addrlist, fstr_t, concs(it));
             it = it->next;
         }
-        DBG("level[", i, "]: [", fss(fstr_implode(addrlist, "] <--> [")), "]");
+        //DBG("level[", i, "]: [", fss(fstr_implode(addrlist, "] <--> [")), "]");
     }
 }
 
@@ -248,12 +249,16 @@ static qk_bsl_part_t* qk_bsl_search_fwd(fstr_t key, qk_bsl_part_t* start) {
         // The first key will always be directly after the partition struct.
         fstr_t node_vec = qk_bsl_node_vec(it);
         fstr_t part_key = qk_bsl_unpack_fstr(&node_vec);
+        //DBGFN("looking for :[", key, "] at: [", part_key, "] in [", it, "] backward is [", it->prev, "]");
         qk_bsl_part_t* next = it->next;
         // The last node is automatically the representative if we get to it.
         if (next == 0) {
             return it;
         }
         if (fstr_cmp_lexical(key, part_key) < 0) {
+            if (it->prev != 0) {
+                return it->prev;
+            }
             return it;
         }
         it = next;
@@ -263,6 +268,7 @@ static qk_bsl_part_t* qk_bsl_search_fwd(fstr_t key, qk_bsl_part_t* start) {
 
 static void qk_bsl_divide_part(qk_bsl_part_t* part, fstr_t key, bool data_level, fstr_t* o_before, fstr_t* o_rest) {
     fstr_t node_vec = qk_bsl_node_vec(part);
+    //DBGFN("part:[", part,"]. splitting for key [", key, "] datalevel:[", data_level, "]");
     fstr_t rest = node_vec;
     fstr_t node_vec_tail = node_vec;
     fstr_t n_key = qk_bsl_unpack_fstr(&node_vec_tail);
@@ -296,7 +302,7 @@ static qk_bsl_part_t* qk_insert(fstr_t key, fstr_t value, uint8_t level, qk_bsl_
     qk_bsl_part_t* rep_part = qk_bsl_search_fwd(key, start);
     // When a level is empty there wont be a representative.
     if (rep_part == 0) {
-        DBGFN("representative was 0");
+        //DBGFN("representative was 0");
         // The representative node did not exist so it has to be made and insterted in ctx.
         rep_part = qk_bsl_new_part(new_size, ctx);
         rep_part->prev = 0;
@@ -305,7 +311,7 @@ static qk_bsl_part_t* qk_insert(fstr_t key, fstr_t value, uint8_t level, qk_bsl_
         // Split is never needed for the first node on a level.
         split = false;
     }
-    DBGFN("rep part: ", rep_part);
+    //DBGFN("rep part: ", rep_part);
     // Divide representative partition.
     fstr_t before, rest;
     qk_bsl_divide_part(rep_part, key, data_level, &before, &rest);
@@ -317,29 +323,31 @@ static qk_bsl_part_t* qk_insert(fstr_t key, fstr_t value, uint8_t level, qk_bsl_
         // We do not want to recursively split partitions so instead we make a big one.
         size_t min_part_size = new_size + rest.len;
         dst_part = qk_bsl_new_part(min_part_size , ctx);
-        DBGFN("rep_part: ", rep_part);
-        DBGFN("rep_part -> next: ", rep_part->next);
-        DBGFN("rep_part -> prev: ", rep_part->prev);
-        DBGFN("dst_part: ", dst_part);
-
+        //DBGFN("rep_part: ", rep_part);
+        //DBGFN("rep_part -> next: ", rep_part->next);
+        //DBGFN("rep_part -> prev: ", rep_part->prev);
+        //DBGFN("dst_part: ", dst_part);
 
         /// this is wrong.
 
         dst_part->prev = rep_part;
         dst_part->next = rep_part->next;
-
+        if (dst_part->next != 0) {
+            dst_part->next->prev = dst_part;
+        }
         if (dst_part->prev != 0) {
             dst_part->prev->next = dst_part;
         }
 
-        DBGFN("dst_part -> next: ", dst_part->next);
-        DBGFN("dst_part -> prev: ", dst_part->prev);
+        //DBGFN("dst_part -> next: ", dst_part->next);
+        //DBGFN("dst_part -> prev: ", dst_part->prev);
         // If there is nothing left of the partition in front it shall be removed.
         if (before.len == 0) {
+            //DBGFN("deallocating part:[", rep_part, "]");
             // If the old represantative partition was split and left without nodes
             // it shall be deleted.
             if (rep_part->prev == 0){
-                DBG("HO HO");
+
                 ctx->header->skip_list[level - 1] = dst_part;
                 dst_part->prev = 0;
             } else {
@@ -354,13 +362,19 @@ static qk_bsl_part_t* qk_insert(fstr_t key, fstr_t value, uint8_t level, qk_bsl_
     } else{
         dst_part = rep_part;
     }
-    DBGFN("before this node:[", fss(fstr_hexencode(before)), "]");
-    DBGFN("after this node:[", fss(fstr_hexencode(rest)), "]");
+    //DBGFN("before this node:[", fss(fstr_hexencode(before)), "]");
+    //DBGFN("after this node:[", fss(fstr_hexencode(rest)), "]");
     // Move the tail part into to dst segment before the new node.
     fstr_t dst_node_vec = qk_bsl_node_vec(dst_part);
-    // DBGFN("newsize ", new_size);
+    // //DBGFN("newsize ", new_size);
     // fstr_t tail_node_segment = fstr_slice(dst_node_vec, new_size + before.len , -1);
-    memmove(dst_node_vec.str + new_size, rest.str, rest.len);
+
+    //DBGFN("partition node vec: [", dst_node_vec.str, "]");
+    //DBGFN("tail segment: [", dst_node_vec.str + new_size, "]");
+
+    DBGFN("part: ", dst_part, " new_size ", new_size, " size:", dst_part->size, " free:", dst_part->free);
+    memmove(dst_node_vec.str + new_size + before.len, rest.str, rest.len);
+
     // Remove the tail from its old partition so it is not in two partitions.
     memset(rest.str, 0, MIN(new_size, rest.len));
     // Copy in the new node.
@@ -380,7 +394,10 @@ static qk_bsl_part_t* qk_insert(fstr_t key, fstr_t value, uint8_t level, qk_bsl_
         qk_bsl_part_t* next_search_start;
         if (before.len > 0) {
             // It is safe to "go back".
-            next_search_start = (void*) rest.str - sizeof(qk_bsl_part_t*);
+            // WTF
+            next_search_start = *(qk_bsl_part_t**)((void*) before.str + before.len - sizeof(qk_bsl_part_t*));
+
+            //DBGFN("next search:", next_search_start, " rep: ", rep_part);
         } else {
             // Levels start at 1.
             next_search_start = ctx->header->skip_list[level - 2];
@@ -403,13 +420,12 @@ static qk_bsl_part_t* qk_bsl_lookup(fstr_t key, qk_bsl_part_t* start) {
 }
 
 join_locked(void) qk_push_inner(fstr_t key, fstr_t value, join_server_params,  qk_ctx_t* ctx) {
-    uint8_t insert_level = 1;
-    DBGFN(key);
-    qk_insert(key, value, insert_level, ctx->header->skip_list[0], true, ctx);
+    uint8_t insert_level = qk_bsl_level();
+    qk_insert(key, value, insert_level, ctx->header->skip_list[insert_level -1], false, ctx);
 }
 
 void qk_push(sf(quark)* sf, fstr_t key, fstr_t value) {
-//    DBGFN("pushing key [", key, "] with value [", value, "]");
+//    //DBGFN("pushing key [", key, "] with value [", value, "]");
     qk_push_inner(key, value, quark_sf2id(sf).fid);
 }
 

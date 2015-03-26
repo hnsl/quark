@@ -50,16 +50,15 @@ static void test2(fstr_t data_file, fstr_t journal_file) {
         acid_h* ah = acid_open(data_file, journal_file, ACID_ADDR_0, 0);
         sf(quark)* sf = qk_init(ah);
         uint128_t qfid = quark_sf2id(sf).fid;
-        qk_push(sf, "a", "AAAAAAAAAAAAAAA");
-        qk_bls_print(sf);
-        qk_push(sf, "b", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
-        qk_bls_print(sf);
-        qk_push(sf, "c", "CCCCCCCCCCCCCCCCCCCCCCC");
-        qk_bls_print(sf);
-        qk_push(sf, "5", fss(fstr_hexrandom(10000)));
-        qk_bls_print(sf);
-        qk_push(sf, "6", fss(fstr_hexrandom(10000)));
-        qk_bls_print(sf);
+        for (size_t i = 0; i < 1000*1000; i++) sub_heap {
+            fstr_t key = fss(fstr_hexrandom(12));
+            fstr_t value = fss(fstr_hexrandom(20));
+            qk_push(sf, key, value);
+//            qk_bls_print(sf);
+//            qk_dprint_free_memory(quark_sf2id(sf).fid);
+  //          acid_fsync(ah);
+   //         acid_fsync(ah);
+        }
         acid_fsync(ah);
         acid_fsync(ah);
     }
