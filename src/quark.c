@@ -90,7 +90,7 @@ static inline void qk_santiy_check(bool check, fstr_t file, int64_t line) {
     }
 }
 
-/// Dynamic memory allocator related code, later to be pulled into librcd.
+// ************************ Dynamic memory allocator. ************************
 
 /// Returns log2(x) rounded down to the nearest integer.
 static uint8_t qk_log2(uint64_t value) {
@@ -130,21 +130,6 @@ static uint8_t qk_bytes_to_pages_2e(size_t bytes, bool round_up) {
 static size_t qk_pages_2e_to_bytes(uint8_t pages_2e) {
     return (1UL << (pages_2e + QK_PAGE_SIZE_2E));
 }
-
-/*
-static void qk_dprint_free_list(qk_ctx_t* ctx) { sub_heap {
-    //DBG("Free lists contains:");
-    for (size_t i = 0; i < 32; i++) {
-        fstr_t line = concs("free_list[", i, "]: ");
-        qk_block_index_t* next = ctx->hdr->free_list[i];
-        while (next != 0){
-            line = concs(line, "->[", next->pages_2e, "]");
-            next = next->next;
-        }
-        //DBG(line, "-> [\\0]");
-    }
-    acid_fsync(ctx->ah);
-}}*/
 
 /// Free memory of the specified size class.
 static void qk_vm_push(qk_ctx_t* ctx, void* block, uint8_t pages_2e) {
@@ -199,15 +184,7 @@ static void qk_vm_free(qk_ctx_t* ctx, void* ptr, uint64_t bytes) {
     qk_vm_push(ctx, ptr, pages_2e);
 }
 
-join_locked(void*) qk_alloc(uint64_t bytes, uint64_t* out_bytes, join_server_params, qk_ctx_t* ctx) {
-    return qk_vm_alloc(ctx, bytes, out_bytes);
-}
-
-join_locked(void) qk_free(void* ptr, uint64_t bytes, join_server_params, qk_ctx_t* ctx) {
-    qk_vm_free(ctx, ptr, bytes);
-}
-
-/// B-skiplist implementation
+// *********************** B-skip list implementation. ***********************
 
 /// Takes an lvl0 index and resolves the value.
 static inline fstr_t qk_idx0_get_value(qk_idx_t* idx) {
@@ -670,7 +647,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     return true;
 }
 
-static qk_ctx_t* qk_init(acid_h* ah, qk_opt_t* opt) {
+qk_ctx_t* qk_init(acid_h* ah, qk_opt_t* opt) {
     // Create context.
     fstr_t am = acid_memory(ah);
     qk_ctx_t new_ctx = {
