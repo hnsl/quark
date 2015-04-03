@@ -1,8 +1,6 @@
 #ifndef QUARK_H
 #define QUARK_H
 
-#include "rcd.h"
-
 /// Maximum supported key length by quark.
 /// Large keys is *not* recommended. Keys smaller than 64 bytes is recommended.
 #define QUARK_MAX_KEY_LEN UINT16_MAX
@@ -10,9 +8,10 @@
 /// Maximum supported value length by quark.
 /// Large values is *not* recommended. Quark is designed for fast table scans
 /// and large values will mess with the built-in tuning, significantly lowering
-/// the
+/// the performance.
 #define QUARK_MAX_VALUE_LEN UINT16_MAX
 
+/// Options for quark.
 typedef struct qk_opt {
     /// Set to true to always overwrite database target ipp.
     /// Set to false to only set target ipp on db init.
@@ -23,13 +22,17 @@ typedef struct qk_opt {
     uint16_t target_ipp;
 } qk_opt_t;
 
-decl_fid_t(quark);
+/// Quark context.
+typedef struct qk_ctx qk_ctx_t;
 
-define_eio(quark);
+/// Inserts a key/value pair into quark database.
+/// Will not attempt fsync or snapshot, caller is responsible for this.
+/// This function must be synchronized. Attempting to sync the database before the
+/// function is complete or calling insert in parallel will corrupt the database.
+bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value);
 
-sf(quark)* qk_init(acid_h* ah, qk_opt_t* opt);
-
-void qk_push(sf(quark)* sf, fstr_t key, fstr_t value);
-list(fstr_t)* qk_slice(sf(quark)* sf,fstr_t from_key, fstr_t to_key);
+/// Opens a quark database.
+/// To close the quark database just fsync the acid handle as required and free the context.
+qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt);
 
 #endif

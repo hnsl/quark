@@ -1,7 +1,7 @@
-#import "rcd.h"
-#import "musl.h"
-#import "acid.h"
-#import "quark-internal.h"
+#include "rcd.h"
+#include "musl.h"
+#include "acid.h"
+#include "quark.h"
 
 #pragma librcd
 
@@ -56,9 +56,9 @@ typedef struct qk_hdr {
     uint64_t session;
     /// TODO: When this is non-zero, don't use variable key length. Should be 0 for now.
     uint64_t static_key_size;
-    /// Total number of items in index.
+    /// Tuning statistics: Total number of items in index.
     uint64_t total_count;
-    /// Total size used by all items in index, including overhead in level 0.
+    /// Tuning statistics: Total size used by all items in index, including overhead in level 0.
     uint64_t total_level0_use;
     /// Tuning parameter: the target items per partition.
     /// Can be set freely on open if requested.
@@ -476,7 +476,7 @@ static bool qk_idx_lookup(qk_idx_t* idx0, qk_idx_t* idxE, fstr_t keyT, qk_idx_t*
     return false;
 }
 
-static bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
+bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     qk_hdr_t* hdr = ctx->hdr;
     // Approximate the overhead of this entity.
     uint64_t est_level0_use = (key.len + value.len + 0x10);
@@ -663,61 +663,50 @@ static bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             req_space = qk_space_kv_level(i_lvl, key, value);
         }
     }
+    // Update tuning statistics.
+    hdr->total_count++;
+    hdr->total_level0_use += req_space;
     // Insert complete.
     return true;
 }
 
-fiber_main_t(quark) qk_fiber(fiber_main_attr, acid_h* ah) {
-    try {
-        // The allocation and free functions are mainly exposed for testing reasons.
-        auto_accept_join(
-            qk_free,
-            qk_alloc,
-            join_server_params,
-            &ctx
-        );
-    } finally {
-        acid_close(ah);
-    }
-}
-
-sf(quark)* qk_init(acid_h* ah, qk_opt_t* opt) {
-    fmitosis {
-        // Read header.
-        fstr_t am = acid_memory(ah);
-        qk_ctx_t ctx = {
-            .hdr = (void*) am.str,
-            .ah = ah,
-        };
-        bool tune_target_ipp;
-        if (ctx.hdr->magic == 0) {
-            // This is a new database, initialize it.
-            memset(ctx.hdr, 0, sizeof(*ctx.hdr));
-            ctx.hdr->magic = QK_HEADER_MAGIC;
-            ctx.hdr->version = QK_VERSION;
-            // Allocate root entry partitions for all levels.
-            for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(ctx.hdr->root); i_lvl--) {
-                ctx.hdr->root[i_lvl] = qk_part_alloc_new(&ctx, 0);
-            }
-            tune_target_ipp = true;
-        } else if (ctx.hdr->magic == QK_HEADER_MAGIC) {
-            // We are opening an existing database;
-            if (ctx.hdr->version != QK_VERSION) {
-                throw_eio("bad database version", quark);
-            }
-            tune_target_ipp = opt->overwrite_target_ipp;
-        } else {
-            // This is not a valid database.
-            throw_eio("corrupt or invalid database", quark);
+static qk_ctx_t* qk_init(acid_h* ah, qk_opt_t* opt) {
+    // Create context.
+    fstr_t am = acid_memory(ah);
+    qk_ctx_t new_ctx = {
+        .hdr = (void*) am.str,
+        .ah = ah,
+    };
+    qk_ctx_t* ctx = cln(&new_ctx);
+    // Read quark header.
+    qk_hdr_t* hdr = ctx->hdr;
+    bool tune_target_ipp;
+    if (hdr->magic == 0) {
+        // This is a new database, initialize it.
+        memset(hdr, 0, sizeof(*hdr));
+        hdr->magic = QK_HEADER_MAGIC;
+        hdr->version = QK_VERSION;
+        // Allocate root entry partitions for all levels.
+        for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root); i_lvl--) {
+            hdr->root[i_lvl] = qk_part_alloc_new(ctx, 0);
         }
-        // Tune target partition size if requested.
-        if (tune_target_ipp) {
-            ctx.hdr->target_ipp = ((opt->target_ipp != 0)? opt->target_ipp: QK_DEFAULT_TARGET_IPP);
+        tune_target_ipp = true;
+    } else if (hdr->magic == QK_HEADER_MAGIC) {
+        // We are opening an existing database.
+        if (hdr->version != QK_VERSION) {
+            throw("bad database version", exception_io);
         }
-        // Increment session and make first fsync to fail here if write does not work.
-        ctx.hdr->session += 1;
-        acid_fsync(ah);
-        // Start handling database requests.
-        return spawn_fiber(qk_fiber("", ah));
+        tune_target_ipp = opt->overwrite_target_ipp;
+    } else {
+        // This is not a valid database.
+        throw("corrupt or invalid database", exception_io);
     }
+    // Tune target partition size if requested.
+    if (tune_target_ipp) {
+        hdr->target_ipp = ((opt->target_ipp != 0)? opt->target_ipp: QK_DEFAULT_TARGET_IPP);
+    }
+    // Increment session and complete first fsync to fail here if write does not work.
+    hdr->session++;
+    acid_fsync(ah);
+    return ctx;
 }
