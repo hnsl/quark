@@ -38,7 +38,21 @@ end
 
 ###### ADDITIONAL DEBUG COMMANDS START ######
 
+# We can't handle SIGSEGV in programs that use acid.
+# They can be thrown 1000s of times per second.
+handle SIGSEGV nostop noprint pass
 
+# Hack that catches any unhandled SIGSEGV with GDB and restores
+# to debuggable context by stepping out of signal handler.
+# This is extremely fragile and will break any time rsig.c/h changes.
+break rsig.c:197
+commands
+silent
+	echo [GDB] unhandled SIGSEGV caught, returning to context\n
+	return
+	stepi 5
+end
 
+run
 
 ###### ADDITIONAL DEBUG COMMANDS STOP ######
