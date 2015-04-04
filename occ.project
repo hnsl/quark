@@ -27,8 +27,12 @@
         "test": {
             "output": "quark.test",
             "library": "",
+            "resources": {
+        	    "vis_tpl": "res/visualize.html"
+            },
             "dependency-build-mask": "debug",
             "additional-src-dirs": ["tests"],
+            "include": ["src"],
             "pp-flags": [
                 "-DDEBUG"
             ]
