@@ -1,6 +1,7 @@
 <!DOCTYPE HTML>
 <html>
 	<head>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
 		<script src="https://cdnjs.cloudflare.com/ajax/libs/vis/3.11.0/vis.min.js"></script>
 		<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/vis/3.11.0/vis.min.css">
 	</head>
@@ -12,13 +13,13 @@
 		  var options = {
 			height: window.innerHeight + "px",
 			width: window.innerWidth + "px",
-			hierarchicalLayout: {
-		        enabled: true,
-		        levelSeparation: 150,
-		        nodeSpacing: 100,
-		        direction: "UD",
-		        layout: "hubsize"
-			},
+			//hierarchicalLayout: {
+		        //enabled: true,
+		        //levelSeparation: 150,
+		        //nodeSpacing: 100,
+		        //direction: "UD",
+		        //layout: "hubsize"
+			//},
 			edges: {
 				style: "arrow"
 			},
@@ -28,7 +29,35 @@
 				
 			}
 		  };
-		  var network = new vis.Network(container, data, options);
+		  var network = new vis.Network(container, [], options);
+		  var step = 0;
+		  var stepFn = function() {
+			  document.title = 'step ' + (step + 1) + "/" + data.length;
+			  network.setData(data[step]);
+		  };
+		  stepFn();
+		  $(document).keydown(function(e) {
+		    switch(e.which) {
+	        case 37: // left
+			step = Math.max(step - 1, 0);
+			stepFn();
+		        break;
+	        case 39: // right
+			step = Math.min(step + 1, data.length - 1);
+			stepFn();
+		        break;
+	        /*
+	        case 38: // up
+		        break;
+	        case 40: // down
+		        break;*/
+	        default:
+			return;
+		    }
+			// Event consumed.
+		    e.preventDefault();
+		    return;
+		});
 		</script>
 	</body>
 </head>

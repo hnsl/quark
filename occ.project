@@ -28,7 +28,8 @@
             "output": "quark.test",
             "library": "",
             "resources": {
-        	    "vis_tpl": "res/visualize.html"
+		    "vis_tpl": "res/visualize.html",
+		    "capitals": "res/capitals.txt"
             },
             "dependency-build-mask": "debug",
             "additional-src-dirs": ["tests"],
