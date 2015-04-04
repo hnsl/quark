@@ -6,8 +6,8 @@
 #define QK_HEADER_MAGIC 0x6aef91b6b454b73f
 #define QK_VERSION 2
 
-/// Smallest possible allocation size: 12 2e = 2^12 = 4kib.
-#define QK_PAGE_SIZE_2E 12
+/// Smallest possible allocation size: 8 2e = 2^8 = 256b.
+#define QK_VM_ATOM_2E 8
 
 /// The default "untuned" target items per partition.
 #define QK_DEFAULT_TARGET_IPP (20)

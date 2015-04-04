@@ -35,13 +35,13 @@ uint8_t qk_value_to_2e(uint64_t value, bool round_up) {
 }
 
 static inline uint8_t qk_bytes_to_pages_2e(size_t bytes, bool round_up) {
-    if (bytes <= (1UL << QK_PAGE_SIZE_2E))
+    if (bytes <= (1UL << QK_VM_ATOM_2E))
         return 0;
-    return qk_value_to_2e(bytes, round_up) - QK_PAGE_SIZE_2E;
+    return qk_value_to_2e(bytes, round_up) - QK_VM_ATOM_2E;
 }
 
 static inline size_t qk_pages_2e_to_bytes(uint8_t pages_2e) {
-    return (1UL << (pages_2e + QK_PAGE_SIZE_2E));
+    return (1UL << (pages_2e + QK_VM_ATOM_2E));
 }
 
 /// Free memory of the specified size class.

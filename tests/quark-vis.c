@@ -5,7 +5,7 @@
 dict(uint8_t);
 
 static json_value_t objid(qk_ctx_t* ctx, void* ptr, fstr_t type) {
-    size_t n = ((size_t) ptr - (size_t) acid_memory(ctx->ah).str) >> QK_PAGE_SIZE_2E;
+    size_t n = ((size_t) ptr - (size_t) acid_memory(ctx->ah).str) >> QK_VM_ATOM_2E;
     return jstr(sconc(type, "/", fss(fstr_from_uint(n, 16))));
 }
 
@@ -119,7 +119,7 @@ fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
         json_append(nodes, jobj_new(
             {"group", jstr("free-list")},
             {"id", list_id},
-            {"label", jstr(concs("free list #", class, "\n", (1 << (QK_PAGE_SIZE_2E + class)), "b"))},
+            {"label", jstr(concs("free list #", class, "\n", (1 << (QK_VM_ATOM_2E + class)), "b"))},
         ));
         json_append(edges, jobj_new(
             {"from", jstr("free-lists")},
