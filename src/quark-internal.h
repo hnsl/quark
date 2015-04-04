@@ -3,8 +3,6 @@
 #include "acid.h"
 #include "quark.h"
 
-#pragma librcd
-
 #define QK_HEADER_MAGIC 0x6aef91b6b454b73f
 #define QK_VERSION 2
 
@@ -63,11 +61,14 @@ typedef struct qk_hdr {
     /// Tuning parameter: the target items per partition.
     /// Can be set freely on open if requested.
     uint16_t target_ipp;
+    /// Deterministic seed. When this parameter is non-zero the key is hashed with this
+    /// seed to determine the entity height instead of using non-deterministic randomness.
+    uint64_t dtrm_seed;
     /// Memory allocator free list. The smallest is 4k and gets
     /// twice as large for each size class.
     void* free_list[32];
     /// End free list size class. The first free list class that is larger than what has
-    /// ever been allocated. The free list vector is undefined at and above this point.
+    /// ever been allocated. The free list vector is zero at and above this point.
     uint8_t free_end_class;
     /// B-Skip-List root, an entry pointer for each level.
     qk_part_t* root[8];
@@ -80,9 +81,11 @@ struct qk_ctx {
     qk_hdr_t* hdr;
 };
 
-static noret void qk_throw_sanity_error(fstr_t file, int64_t line) {
-    throw(concs("quark detected fatal memory corruption or algorithm error at ", file, ":", line), exception_fatal);
-}
+uint8_t qk_value_to_2e(uint64_t value, bool round_up);
+void* qk_vm_alloc(qk_ctx_t* ctx, uint64_t bytes, uint64_t* out_bytes);
+void qk_vm_free(qk_ctx_t* ctx, void* ptr, uint64_t bytes);
+
+noret void qk_throw_sanity_error(fstr_t file, int64_t line);
 
 static inline void qk_santiy_check(bool check, fstr_t file, int64_t line) {
     if (!check) {
@@ -90,6 +93,37 @@ static inline void qk_santiy_check(bool check, fstr_t file, int64_t line) {
     }
 }
 
-uint8_t qk_value_to_2e(uint64_t value, bool round_up);
-void* qk_vm_alloc(qk_ctx_t* ctx, uint64_t bytes, uint64_t* out_bytes);
-void qk_vm_free(qk_ctx_t* ctx, void* ptr, uint64_t bytes);
+/// Takes an index and resolves the key.
+static inline fstr_t qk_idx_get_key(qk_idx_t* idx) {
+    fstr_t key = {
+        .str = idx->keyptr,
+        .len = idx->keylen,
+    };
+    return key;
+}
+
+/// Takes an lvl0 index and resolves the value.
+static inline fstr_t qk_idx0_get_value(qk_idx_t* idx) {
+    uint64_t* valuelen = *((void**) (idx->keyptr + idx->keylen));
+    uint8_t* valuestr = (void*) (valuelen + 1);
+    fstr_t value = {
+        .str = valuestr,
+        .len = *valuelen,
+    };
+    return value;
+}
+
+/// Takes an lvl1+ index and resolves the down pointer reference.
+static inline qk_part_t** qk_idx1_get_down_ptr(qk_idx_t* idx) {
+    return (void*) (idx->keyptr + idx->keylen);
+}
+
+/// Returns the first index entity (at offset 0) in a partition.
+static inline qk_idx_t* qk_part_get_idx0(qk_part_t* part) {
+    return (void*) part + sizeof(*part);
+}
+
+/// Returns the start write pointer (at first allocated byte) in partition tail.
+static inline qk_idx_t* qk_part_get_write0(qk_part_t* part) {
+    return ((void*) part) + part->total_size - part->data_size;
+}

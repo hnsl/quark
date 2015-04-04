@@ -2,21 +2,12 @@
  * Quark b-skip list implementation. */
 
 #include "quark-internal.h"
+#include "hmap.h"
 
-/// Takes an lvl0 index and resolves the value.
-static inline fstr_t qk_idx0_get_value(qk_idx_t* idx) {
-    uint64_t* valuelen = *((void**) (idx->keyptr + idx->keylen));
-    uint8_t* valuestr = (void*) (valuelen + 1);
-    fstr_t value = {
-        .str = valuestr,
-        .len = *valuelen,
-    };
-    return value;
-}
+#pragma librcd
 
-/// Takes an lvl1+ index and resolves the down pointer reference.
-static inline qk_part_t** qk_idx1_get_down_ptr(qk_idx_t* idx) {
-    return (void*) (idx->keyptr + idx->keylen);
+noret void qk_throw_sanity_error(fstr_t file, int64_t line) {
+    throw(concs("quark detected fatal memory corruption or algorithm error at ", file, ":", line), exception_fatal);
 }
 
 /// Allocates a new empty partition.
@@ -33,16 +24,6 @@ static inline qk_part_t* qk_part_alloc_new(qk_ctx_t* ctx, uint64_t req_space) {
 /// Frees a no longer used and no longer referenced partition.
 static inline void qk_part_alloc_free(qk_ctx_t* ctx, qk_part_t* part) {
     qk_vm_free(ctx, part, part->total_size);
-}
-
-/// Returns the first index entity (at offset 0) in a partition.
-static inline qk_idx_t* qk_part_get_idx0(qk_part_t* part) {
-    return (void*) part + sizeof(*part);
-}
-
-/// Returns the start write pointer (at first allocated byte) in partition tail.
-static inline qk_idx_t* qk_part_get_write0(qk_part_t* part) {
-    return ((void*) part) + part->total_size - part->data_size;
 }
 
 /// Returns the number of bytes required to store a certain key/value pair at a certain level.
@@ -286,8 +267,14 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     // Due to the heavy bias of the coin toss it should be faster to do this numerically than using software math.
     uint8_t insert_lvl = 0;
     do {
-        uint64_t n = lwt_rdrand64() & target_ps_mask;
-        if (n < avg_ent_size)
+        uint64_t dice;
+        if (hdr->dtrm_seed == 0) {
+            dice = lwt_rdrand64();
+        } else {
+            dice = hmap_murmurhash_64a(key.str, key.len, hdr->dtrm_seed + insert_lvl);
+        }
+        dice = dice & target_ps_mask;
+        if (dice < avg_ent_size)
             break;
         insert_lvl++;
     } while (insert_lvl < LENGTHOF(hdr->root) - 1);
@@ -464,7 +451,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     return true;
 }
 
-qk_ctx_t* qk_init(acid_h* ah, qk_opt_t* opt) {
+qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
     // Create context.
     fstr_t am = acid_memory(ah);
     qk_ctx_t new_ctx = {
@@ -481,7 +468,7 @@ qk_ctx_t* qk_init(acid_h* ah, qk_opt_t* opt) {
         hdr->magic = QK_HEADER_MAGIC;
         hdr->version = QK_VERSION;
         // Allocate root entry partitions for all levels.
-        for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root); i_lvl--) {
+        for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root); i_lvl++) {
             hdr->root[i_lvl] = qk_part_alloc_new(ctx, 0);
         }
         tune_target_ipp = true;
@@ -499,6 +486,8 @@ qk_ctx_t* qk_init(acid_h* ah, qk_opt_t* opt) {
     if (tune_target_ipp) {
         hdr->target_ipp = ((opt->target_ipp != 0)? opt->target_ipp: QK_DEFAULT_TARGET_IPP);
     }
+    // Write deterministic seed setting.
+    hdr->dtrm_seed = opt->dtrm_seed;
     // Increment session and complete first fsync to fail here if write does not work.
     hdr->session++;
     acid_fsync(ah);

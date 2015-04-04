@@ -20,6 +20,10 @@ typedef struct qk_opt {
     /// The database will auto tune internal probabilities based on inserted data
     /// to attempt to approach this value.
     uint16_t target_ipp;
+    /// Deterministic seed. When this parameter is non-zero the key is hashed with this
+    /// seed to determine the entity height instead of using non-deterministic randomness.
+    /// Useful when writing deterministic tests.
+    uint64_t dtrm_seed;
 } qk_opt_t;
 
 /// Quark context.

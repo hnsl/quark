@@ -3,6 +3,8 @@
 
 #include "quark-internal.h"
 
+#pragma librcd
+
 /// Returns log2(x) rounded down to the nearest integer.
 static uint8_t qk_log2(uint64_t value) {
     // First round down to one less than a power of 2.
@@ -72,7 +74,8 @@ static void* qk_vm_pop(qk_ctx_t* ctx, uint8_t pages_2e) {
             // Split block and reinsert until we reach the required size.
             block_len = qk_pages_2e_to_bytes(i_2e);
             has_rblock:;
-            for (; i_2e > pages_2e; i_2e--) {
+            while (i_2e > pages_2e) {
+                i_2e--;
                 *((void**) block) = hdr->free_list[i_2e];
                 hdr->free_list[i_2e] = block;
                 block_len /= 2;
