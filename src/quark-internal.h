@@ -104,11 +104,11 @@ static inline fstr_t qk_idx_get_key(qk_idx_t* idx) {
 
 /// Takes an lvl0 index and resolves the value.
 static inline fstr_t qk_idx0_get_value(qk_idx_t* idx) {
-    uint64_t* valuelen = *((void**) (idx->keyptr + idx->keylen));
-    uint8_t* valuestr = (void*) (valuelen + 1);
+    uint64_t* valuelen_ptr = (void*) (idx->keyptr + idx->keylen);
+    uint8_t* valuestr = (void*) (valuelen_ptr + 1);
     fstr_t value = {
         .str = valuestr,
-        .len = *valuelen,
+        .len = *valuelen_ptr,
     };
     return value;
 }

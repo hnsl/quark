@@ -259,6 +259,8 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     uint64_t avg_ent_size = (est_level0_use + hdr->total_level0_use) / (hdr->total_count + 1);
     // Get target partition size.
     // Force it to be at least x2 the size of avg_ent_size for a worst case coin toss probability of 50/50 (binary skip list).
+    // TODO: Target partition size cannot be smaller than minimum allocation size.
+    // Minimum allocation size is likely to large as well... it's pointlessly large.
     uint64_t target_part_size = MAX(hdr->target_ipp * avg_ent_size, avg_ent_size * 2);
     // Mask the target partition size and round up as partitions must have a power of two size.
     // This also gets rid of the (negligible) non-biased "partial-bit" randomness problem.
@@ -274,10 +276,12 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             dice = hmap_murmurhash_64a(key.str, key.len, hdr->dtrm_seed + insert_lvl);
         }
         dice = dice & target_ps_mask;
-        if (dice < avg_ent_size)
+        // DBGFN("dice roll: ", avg_ent_size, "/", dice, "/", target_ps_mask);
+        if (dice >= avg_ent_size)
             break;
         insert_lvl++;
     } while (insert_lvl < LENGTHOF(hdr->root) - 1);
+    DBGFN("inserting [", key, "] => [", value, "] on level #", insert_lvl);
     // We have generated a fair insert level and is ready to begin insert.
     // Read phase: Search from top level to:
     //  1) Resolve target partitions to insert on.
@@ -358,6 +362,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             // Make sure the partition has enough space.
             uint64_t free_space = qk_part_free_space(part);
             if (free_space < req_space) {
+                DBGFN("reallocating partition ", part);
                 // We must reallocate the partition so we can have room for insert.
                 void* old_part_ptr = part;
                 uint64_t old_size = part->total_size;
@@ -374,6 +379,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             // Also resolve initial left and right down reference for split phase.
             qk_part_insert_entry(i_lvl, part, idxT, key, value, &downL, &downR);
         } else {
+            DBGFN("splitting partition ", part);
             assert(i_lvl < insert_lvl);
             // Partition split mode.
             // We can only have come here from normal insert at level above
