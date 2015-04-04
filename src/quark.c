@@ -107,7 +107,7 @@ static void qk_part_insert_entry(
         // Allocate down pointer in data and return pointer to it so caller
         // can write it when the down partition has been resolved.
         writeD -= sizeof(qk_part_t*);
-        // Writing right down pointer is up to caller.
+        // Writing right down pointer is required by the caller.
         *out_downR = (qk_part_t**) writeD;
     } else {
         // Allocate value and write it.
@@ -132,14 +132,15 @@ static void qk_part_insert_entry(
         memmove(idxT + 1, idxT, (idxE - idxT) * sizeof(*idxT));
     }
     assert(idxT >= idx0 && idxT <= idxE);
+    assert((void*) (idxE + 1) <= writeD);
     // Write index.
     idxT->keylen = key.len;
     idxT->keyptr = writeD;
     // Update partition meta data.
     dst_part->n_keys++;
     dst_part->data_size += (write0 - writeD);
-    // Resolve left down pointer.
-    if (level > 0) {
+    // Resolve left down pointer if requested.
+    if (level > 0 && out_downL != 0) {
         *out_downL = (idxT > idx0)? qk_idx1_get_down_ptr(idxT - 1): 0;
     }
 }
@@ -385,24 +386,35 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             // We can only have come here from normal insert at level above
             // with a down pointer that is pending to be written.
             assert(downR != 0);
-            // Right and left is empty (partition empty): just insert element, no split is equivalent to split.
-            // Right is empty: allocate new right partition and insert on, no move required.
-            // Left is empty: allocate new left partition and insert on, no move required.
-            // Right and left both has elements: standard "hard" split.
+            // There are two main split scenarios:
+            // * Right is empty and/or left is empty: no move is required. We can simply allocate new left
+            //   or right "side" partition and insert on. The left side can only be empty when we made a
+            //   leftmost insert on the insert level (followed from root). In this case if the right is
+            //   *not* empty the current partition must be a root entry partition and the new partition
+            //   is inserted on its left side, ripping the it from the level root.
+            //   The new partition can however *not* be the new level entry partition since it's referenced
+            //   from above (we are splitting) which means that the level root entry partition is empty
+            //   (split resulted in zero elements) so we must allocate an empty partition and attach to it.
+            // * Right and left both has elements: standard "hard" split.
             qk_idx_t* idx0 = qk_part_get_idx0(part);
             qk_idx_t* idxE = idx0 + part->n_keys;
             assert(idxT >= idx0 && idxT <= idxE);
             bool left_empty = (idxT == idx0);
             bool right_empty = (idxT == idxE);
             qk_part_t **next_downL, **next_downR;
-            if (right_empty && left_empty) {
-                // No split required, just insert.
-                qk_part_insert_entry(i_lvl, part, 0, key, value, &next_downL, &next_downR);
-            } else if (right_empty || left_empty) {
+            if (right_empty || left_empty) {
                 // No move required. Allocate new partition to insert on.
-                part = qk_part_alloc_new(ctx, req_space);
-                qk_part_insert_entry(i_lvl, part, 0, key, value, &next_downL, &next_downR);
-                // Left down pointer update not required. Partition is maintained in place.
+                qk_part_t* new_part = qk_part_alloc_new(ctx, req_space);
+                qk_part_insert_entry(i_lvl, new_part, 0, key, value, &next_downL, &next_downR);
+                if (!right_empty) {
+                    // The current partition is a level root entry partition since left is empty.
+                    // However since right isn't we must allocate a new empty partition and attach
+                    // to the root. See split scenario abstract above for more information.
+                    assert(hdr->root[i_lvl] == part);
+                    hdr->root[i_lvl] = qk_part_alloc_new(ctx, 0);
+                }
+                // We are now "on" the new partition.
+                part = new_part;
             } else {
                 // Standard "hard" split.
                 // Calculate required space for new left and right partition.
@@ -414,8 +426,13 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 qk_part_t* partR = qk_part_alloc_new(ctx, spaceR);
                 // Copy all entries to the left over to the left partition.
                 qk_part_insert_entry_range(i_lvl, partL, idx0, idxT);
+                // On levels above zero we resolve the next left down pointer
+                // reference which is the last entity in the left partition.
+                if (i_lvl > 0) {
+                    next_downL = qk_idx1_get_down_ptr(qk_part_get_idx0(partL) + partL->n_keys - 1);
+                }
                 // First element we insert in right partition is the new entity.
-                qk_part_insert_entry(i_lvl, partR, 0, key, value, &next_downL, &next_downR);
+                qk_part_insert_entry(i_lvl, partR, 0, key, value, 0, &next_downR);
                 // Copy all entries to the right over to the right partition.
                 qk_part_insert_entry_range(i_lvl, partR, idxT, idxE);
                 // Update left down pointer to point to the new left partition.
