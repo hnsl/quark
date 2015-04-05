@@ -254,31 +254,24 @@ static bool qk_idx_lookup(qk_idx_t* idx0, qk_idx_t* idxE, fstr_t keyT, qk_idx_t*
 
 bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     qk_hdr_t* hdr = ctx->hdr;
-    // Approximate the overhead of this entity.
-    uint64_t est_level0_use = (key.len + value.len + 0x10);
-    // Calculate average entity level0 size for self-tuning probability.
-    uint64_t avg_ent_size = (est_level0_use + hdr->total_level0_use) / (hdr->total_count + 1);
-    // Get target partition size.
-    // Force it to be at least x2 the size of avg_ent_size for a worst case coin toss probability of 50/50 (binary skip list).
-    // TODO: Target partition size cannot be smaller than minimum allocation size.
-    // Minimum allocation size is likely to large as well... it's pointlessly large.
-    uint64_t target_part_size = MAX(hdr->target_ipp * avg_ent_size, avg_ent_size * 2);
-    // Mask the target partition size and round up as partitions must have a power of two size.
-    // This also gets rid of the (negligible) non-biased "partial-bit" randomness problem.
-    uint64_t target_ps_mask = (1ULL << qk_value_to_2e(target_part_size, true)) - 1;
     // Calculate the level to insert node at through a series of presumably heavily biased coin tosses.
     // Due to the heavy bias of the coin toss it should be faster to do this numerically than using software math.
+    uint64_t dspace = MAX(hdr->target_ipp, 1) + 1ULL;
     uint8_t insert_lvl = 0;
     do {
-        uint64_t dice;
+        uint64_t rnd64, dice;
+        // Get 64 bit of random entropy.
         if (hdr->dtrm_seed == 0) {
-            dice = lwt_rdrand64();
+            rnd64 = lwt_rdrand64();
         } else {
-            dice = hmap_murmurhash_64a(key.str, key.len, hdr->dtrm_seed + insert_lvl);
+            rnd64 = hmap_murmurhash_64a(key.str, key.len, hdr->dtrm_seed + insert_lvl);
         }
-        dice = dice & target_ps_mask;
-        // DBGFN("dice roll: ", avg_ent_size, "/", dice, "/", target_ps_mask);
-        if (dice >= avg_ent_size)
+        // Translate to dice space.
+        dice = rnd64 % dspace;
+        // The dice space is at max 16 bit. The worst case probability error we can get from
+        // non-aligned dspace (2^64 % dspace != 0) is negligible (2^16 / 2^48 = 2e-10) and
+        // can safely be ignored.
+        if (dice != 0)
             break;
         insert_lvl++;
     } while (insert_lvl < LENGTHOF(hdr->root) - 1);
