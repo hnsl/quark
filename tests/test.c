@@ -25,6 +25,7 @@ static void vis_render(qk_ctx_t* qk) {
     }
     lwt_alloc_free(vis_heap);
     vis_init();
+    DBGFN("rendered snapshots");
 }
 
 static void vis_snapshot(qk_ctx_t* ctx) { switch_heap(vis_heap) {
