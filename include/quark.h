@@ -35,6 +35,9 @@ typedef struct qk_ctx qk_ctx_t;
 /// function is complete or calling insert in parallel will corrupt the database.
 bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value);
 
+/// Returns statistics for the open database.
+json_value_t qk_get_stats(qk_ctx_t* ctx);
+
 /// Opens a quark database.
 /// To close the quark database just fsync the acid handle as required and free the context.
 qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt);

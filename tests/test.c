@@ -34,6 +34,10 @@ static void vis_snapshot(qk_ctx_t* ctx) { switch_heap(vis_heap) {
     DBGFN("taking snapshot #", list_count(vis_snaps, fstr_t));
 }}
 
+static void print_stats(qk_ctx_t* qk) { sub_heap {
+    DBGFN(fss(json_stringify_pretty(qk_get_stats(qk))));
+}}
+
 static void test_open_new_qk(qk_ctx_t** out_qk, acid_h** out_ah) {
     fstr_t data_path = concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64(), ".data");
     fstr_t journal_path = concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64(), ".jrnl");
@@ -87,6 +91,7 @@ static void test1() { sub_heap {
     acid_h* ah;
     test_open_new_qk(&qk, &ah);
     vis_snapshot(qk);
+    print_stats(qk);
     size_t n = 0;
     extern fstr_t capitals;
     fstr_t tail = capitals;
@@ -95,11 +100,12 @@ static void test1() { sub_heap {
         if (!fstr_divide(row, ",", &country, &capital))
             continue;
         qk_insert(qk, capital, country);
-        n++;
+        /*n++;
         if ((n % 40) == 0) {
             vis_snapshot(qk);
-        }
+        }*/
     }
+    print_stats(qk);
     vis_snapshot(qk);
     vis_render(qk);
     acid_fsync(ah);

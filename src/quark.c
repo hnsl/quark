@@ -11,19 +11,33 @@ noret void qk_throw_sanity_error(fstr_t file, int64_t line) {
 }
 
 /// Allocates a new empty partition.
-static inline qk_part_t* qk_part_alloc_new(qk_ctx_t* ctx, uint64_t req_space) {
+static inline qk_part_t* qk_part_alloc_new(qk_ctx_t* ctx, uint8_t level, uint64_t req_space) {
+    // Allocate and initialize partition.
     size_t part_size;
+    uint8_t size_class;
     uint64_t min_size = sizeof(qk_part_t) + req_space;
-    qk_part_t* part = qk_vm_alloc(ctx, min_size, &part_size);
+    qk_part_t* part = qk_vm_alloc(ctx, min_size, &part_size, &size_class);
     *part = (qk_part_t) {
         .total_size = part_size
     };
+    // Update statistics.
+    ctx->hdr->stats.part_class_count[size_class]++;
+    ctx->hdr->stats.lvl[level].total_alloc_b += part_size;
+    ctx->hdr->stats.lvl[level].part_count++;
+    // Return partition.
     return part;
 }
 
 /// Frees a no longer used and no longer referenced partition.
-static inline void qk_part_alloc_free(qk_ctx_t* ctx, qk_part_t* part) {
-    qk_vm_free(ctx, part, part->total_size);
+static inline void qk_part_alloc_free(qk_ctx_t* ctx, uint8_t level, qk_part_t* part) {
+    // Free partition.
+    uint8_t size_class;
+    uint64_t total_size = part->total_size;
+    qk_vm_free(ctx, part, total_size, &size_class);
+    // Update statistics.
+    ctx->hdr->stats.part_class_count[size_class]--;
+    ctx->hdr->stats.lvl[level].total_alloc_b -= total_size;
+    ctx->hdr->stats.lvl[level].part_count--;
 }
 
 /// Returns the number of bytes required to store a certain key/value pair at a certain level.
@@ -80,6 +94,8 @@ static void qk_part_insert_entry_range(uint8_t level, qk_part_t* dst_part, qk_id
     }
     dst_part->n_keys = (idxD - idx0);
     dst_part->data_size += (write0 - writeD);
+    // No statistics is required to be updated as we assume the
+    // entries copied over was already allocated and accounted for.
 }
 
 /// Inserts an entry into a partition at a target index.
@@ -96,7 +112,8 @@ static void qk_part_insert_entry_range(uint8_t level, qk_part_t* dst_part, qk_id
 ///     - Updating the returned right and left down pointer references
 ///       as required/applicable.
 static void qk_part_insert_entry(
-    uint8_t level, qk_part_t* dst_part, qk_idx_t* idxT,
+    qk_hdr_t* hdr, uint8_t level,
+    qk_part_t* dst_part, qk_idx_t* idxT,
     fstr_t key, fstr_t value,
     qk_part_t*** out_downL, qk_part_t*** out_downR
 ) {
@@ -137,8 +154,12 @@ static void qk_part_insert_entry(
     idxT->keylen = key.len;
     idxT->keyptr = writeD;
     // Update partition meta data.
+    uint64_t data_alloc = (write0 - writeD);
     dst_part->n_keys++;
-    dst_part->data_size += (write0 - writeD);
+    dst_part->data_size += data_alloc;
+    // Update statistics.
+    hdr->stats.lvl[level].ent_count++;
+    hdr->stats.lvl[level].data_alloc_b += data_alloc;
     // Resolve left down pointer if requested.
     if (level > 0 && out_downL != 0) {
         *out_downL = (idxT > idx0)? qk_idx1_get_down_ptr(idxT - 1): 0;
@@ -159,21 +180,19 @@ static inline uint64_t qk_part_free_space(qk_part_t* part) {
 /// The new partition has all internal pointers updated as required.
 /// The function will however not update any external references, it leaves
 /// that responsibility to the caller.
-static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, qk_part_t* part, uint64_t req_space) {
-    // Expand partition capacity.
-    uint64_t min_new_size = part->total_size + req_space;
-    uint64_t new_size;
-    qk_part_t* new_part = qk_vm_alloc(ctx, min_new_size, &new_size);
+static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, uint8_t level, qk_part_t* part, uint64_t req_space) {
+    // Allocate replacement partition.
+    qk_part_t* new_part = qk_part_alloc_new(ctx, level, part->total_size + req_space);
     // Copy data of entities. No internal translation is required.
     {
-        void* data_dst = ((void*) new_part) + new_size - part->data_size;
+        void* data_dst = ((void*) new_part) + new_part->total_size - part->data_size;
         void* data_src = ((void*) part) + part->total_size - part->data_size;
         memcpy(data_dst, data_src, part->data_size);
     }
     // Copy keys of entities with translated key pointers.
     {
         int64_t part_offs =  (void*) new_part - (void*) part;
-        int64_t part_data_offs = (int64_t) new_size - (int64_t) part->total_size + part_offs;
+        int64_t part_data_offs = (int64_t) new_part->total_size - (int64_t) part->total_size + part_offs;
         qk_idx_t* idxC_old = qk_part_get_idx0(part);
         qk_idx_t* idxE_old = idxC_old + part->n_keys;
         qk_idx_t* idxC_new = qk_part_get_idx0(new_part);
@@ -183,11 +202,10 @@ static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, qk_part_t* part, uint64_t req_s
         }
     }
     // Initialize header.
-    new_part->total_size = new_size;
     new_part->n_keys = part->n_keys;
     new_part->data_size = part->data_size;
     // Free old partition.
-    qk_part_alloc_free(ctx, part);
+    qk_part_alloc_free(ctx, level, part);
     // Using new expanded partition now.
     assert(qk_part_free_space(new_part) >= req_space);
     return new_part;
@@ -360,7 +378,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 // We must reallocate the partition so we can have room for insert.
                 void* old_part_ptr = part;
                 uint64_t old_size = part->total_size;
-                qk_part_t* new_part = qk_part_realloc(ctx, part, req_space);
+                qk_part_t* new_part = qk_part_realloc(ctx, i_lvl, part, req_space);
                 // Translate reference to target index. This faster than doing a new lookup.
                 int64_t part_offs = (void*) new_part - (void*) part;
                 idxT = ((void*) idxT) + part_offs;
@@ -371,7 +389,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             }
             // Insert the entity now at the resolved target index.
             // Also resolve initial left and right down reference for split phase.
-            qk_part_insert_entry(i_lvl, part, idxT, key, value, &downL, &downR);
+            qk_part_insert_entry(hdr, i_lvl, part, idxT, key, value, &downL, &downR);
         } else {
             assert(i_lvl < insert_lvl);
             // Partition split mode.
@@ -398,8 +416,8 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             if (right_empty || left_empty) {
                 // No move required. Allocate new partition to insert on.
                 DBGFN("new splitting partition ", part, " on level #", i_lvl);
-                qk_part_t* new_part = qk_part_alloc_new(ctx, req_space);
-                qk_part_insert_entry(i_lvl, new_part, 0, key, value, 0, &next_downR);
+                qk_part_t* new_part = qk_part_alloc_new(ctx, i_lvl, req_space);
+                qk_part_insert_entry(hdr, i_lvl, new_part, 0, key, value, 0, &next_downR);
                 if (!left_empty) {
                     // The current partition is the left partition.
                     // We must update its down pointer if we are splitting below.
@@ -412,7 +430,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                         // However, since right isn't we must allocate a new empty partition and attach
                         // to the root. See split scenario abstract above for more information.
                         assert(hdr->root[i_lvl] == part);
-                        hdr->root[i_lvl] = qk_part_alloc_new(ctx, 0);
+                        hdr->root[i_lvl] = qk_part_alloc_new(ctx, i_lvl, 0);
                     }
                 }
                 // We are now "on" the new partition.
@@ -425,12 +443,12 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 uint64_t spaceL = qk_space_range_level(i_lvl, idx0, idxT);
                 uint64_t spaceR = req_space + qk_space_range_level(i_lvl, idxT, idxE);
                 // Allocate new left + right partition.
-                partL = qk_part_alloc_new(ctx, spaceL);
-                qk_part_t* partR = qk_part_alloc_new(ctx, spaceR);
+                partL = qk_part_alloc_new(ctx, i_lvl, spaceL);
+                qk_part_t* partR = qk_part_alloc_new(ctx, i_lvl, spaceR);
                 // Copy all entries to the left over to the left partition.
                 qk_part_insert_entry_range(i_lvl, partL, idx0, idxT);
                 // First element we insert in right partition is the new entity.
-                qk_part_insert_entry(i_lvl, partR, 0, key, value, 0, &next_downR);
+                qk_part_insert_entry(hdr, i_lvl, partR, 0, key, value, 0, &next_downR);
                 // Copy all entries to the right over to the right partition.
                 qk_part_insert_entry_range(i_lvl, partR, idxT, idxE);
                 // Update left down pointer to point to the new left partition.
@@ -444,7 +462,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                     hdr->root[i_lvl] = partL;
                 }
                 // Deallocate the old partition.
-                qk_part_alloc_free(ctx, part);
+                qk_part_alloc_free(ctx, i_lvl, part);
                 // We are now "on" the right partition.
                 part = partR;
             }
@@ -471,11 +489,34 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             req_space = qk_space_kv_level(i_lvl, key, value);
         }
     }
-    // Update tuning statistics.
-    hdr->total_count++;
-    hdr->total_level0_use += req_space;
     // Insert complete.
     return true;
+}
+
+json_value_t qk_get_stats(qk_ctx_t* ctx) {
+    qk_hdr_t* hdr = ctx->hdr;
+    json_value_t levels = jarr_new();
+    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->stats.lvl); i_lvl++) {
+        json_append(levels, jobj_new(
+            {"level", jnum(i_lvl)},
+            {"ent_count", jnum(hdr->stats.lvl[i_lvl].ent_count)},
+            {"part_count", jnum(hdr->stats.lvl[i_lvl].part_count)},
+            {"total_alloc_b", jnum(hdr->stats.lvl[i_lvl].total_alloc_b)},
+            {"data_alloc_b", jnum(hdr->stats.lvl[i_lvl].data_alloc_b)},
+        ));
+    }
+    json_value_t part_class_count = jobj_new();
+    for (uint8_t class = 0; class < LENGTHOF(hdr->stats.part_class_count); class++) {
+        uint64_t count = hdr->stats.part_class_count[class];
+        if (count == 0)
+            continue;
+        JSON_SET(part_class_count, concs(qk_atoms_2e_to_bytes(class), "b"), jnum(count));
+    }
+    return jobj_new(
+        {"entry_cap", jnum(ctx->entry_cap)},
+        {"levels", levels},
+        {"part_class_count", part_class_count},
+    );
 }
 
 qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
@@ -496,7 +537,7 @@ qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
         hdr->version = QK_VERSION;
         // Allocate root entry partitions for all levels.
         for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root); i_lvl++) {
-            hdr->root[i_lvl] = qk_part_alloc_new(ctx, 0);
+            hdr->root[i_lvl] = qk_part_alloc_new(ctx, i_lvl, 0);
         }
         tune_target_ipp = true;
     } else if (hdr->magic == QK_HEADER_MAGIC) {
@@ -518,5 +559,16 @@ qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
     // Increment session and complete first fsync to fail here if write does not work.
     hdr->session++;
     acid_fsync(ah);
+    // Calculate entry capacity.
+    uint16_t target_ipp = hdr->target_ipp;
+    uint128_t entry_cap = target_ipp;
+    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root) - 1; i_lvl++) {
+        if (!arth_safe_mul_uint128(entry_cap, target_ipp, &entry_cap)) {
+            entry_cap = UINT128_MAX;
+            break;
+        }
+    }
+    ctx->entry_cap = entry_cap;
+    // Return with context.
     return ctx;
 }
