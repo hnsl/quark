@@ -211,24 +211,6 @@ static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, uint8_t level, qk_part_t* part,
     return new_part;
 }
 
-/// After reallocating a partition it can be necessary to translate pointers into it.
-/// This function takes a pointer and reallocation information and checks if translation
-/// is required and returns the translated pointer.
-static inline void* qk_part_realloc_translate(void* ptr, void* old_part, uint64_t old_size, qk_part_t* new_part) {
-    if (ptr >= old_part && ptr < old_part + old_size) {
-        int64_t part_offs = (void*) new_part - old_part;
-        if (ptr < old_part + old_size - new_part->data_size) {
-            // Pointer to index.
-            ptr += part_offs;
-        } else {
-            // Pointer to data.
-            int64_t part_data_offs = ((int64_t) new_part->total_size - (int64_t) old_size) + part_offs;
-            ptr += part_data_offs;
-        }
-    }
-    return ptr;
-}
-
 /// Binary search in a partition index for specified key and returns the index for it.
 /// When the key is not found false is returned and a pointer to the index where the
 /// key should be inserted.
