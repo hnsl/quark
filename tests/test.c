@@ -94,20 +94,41 @@ static void test1() { sub_heap {
     print_stats(qk);
     size_t n = 0;
     extern fstr_t capitals;
-    fstr_t tail = capitals;
-    for (fstr_t row; fstr_iterate_trim(&tail, "\n", &row);) {
+    bool found_andorra = false;
+    for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) {
         fstr_t country, capital;
         if (!fstr_divide(row, ",", &country, &capital))
             continue;
-        qk_insert(qk, capital, country);
-        /*n++;
-        if ((n % 40) == 0) {
-            vis_snapshot(qk);
-        }*/
+
+        fstr_t value;
+        atest(!qk_get(qk, capital, &value));
+        atest(qk_insert(qk, capital, country));
+        atest(qk_get(qk, capital, &value));
+
+        atest(fstr_equal(value, country));
+        if (fstr_equal(capital, "Andorra la Vella")) {
+            found_andorra = true;
+        }
+        if (found_andorra) {
+            atest(qk_get(qk, "Andorra la Vella", &value));
+            atest(fstr_equal(value, "Andorra"));
+        } else {
+            atest(!qk_get(qk, "Andorra la Vella", &value));
+        }
     }
-    print_stats(qk);
     vis_snapshot(qk);
     vis_render(qk);
+    print_stats(qk);
+    for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
+        fstr_t country, capital;
+        if (!fstr_divide(row, ",", &country, &capital))
+            continue;
+        fstr_t value;
+        DBGFN("looking up [", capital, "]");
+        atest(qk_get(qk, capital, &value));
+        atest(fstr_equal(value, country));
+        atest(!qk_get(qk, concs(capital, "\x00"), &value));
+    }}
     acid_fsync(ah);
     acid_close(ah);
 

@@ -29,6 +29,9 @@ typedef struct qk_opt {
 /// Quark context.
 typedef struct qk_ctx qk_ctx_t;
 
+/// Fetches a single value from the quark database from the specified key.
+bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value);
+
 /// Inserts a key/value pair into quark database.
 /// Will not attempt fsync or snapshot, caller is responsible for this.
 /// This function must be synchronized. Attempting to sync the database before the
