@@ -253,6 +253,9 @@ static bool qk_idx_lookup(qk_idx_t* idx0, qk_idx_t* idxE, fstr_t keyT, qk_idx_t*
 }
 
 bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
+    if (key.len > UINT16_MAX) sub_heap {
+        throw(concs("key is too large, [", key.len, "] > [", UINT16_MAX, "]"), exception_io);
+    }
     qk_hdr_t* hdr = ctx->hdr;
     // Calculate the level to insert node at through a series of presumably heavily biased coin tosses.
     // Due to the heavy bias of the coin toss it should be faster to do this numerically than using software math.
