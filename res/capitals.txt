@@ -127,7 +127,6 @@ Norway,Oslo
 Oman,Muscat
 Pakistan,Islamabad
 Palau,Koror
-Palestine,Jerusalem
 Panama,Panama City
 Papua New Guinea,Port Moresby
 Paraguay,Asuncion
@@ -141,7 +140,6 @@ Republic of Ireland,Dublin
 Republic of Macedonia,Skopje
 Republic of the Congo,Brazzaville
 Romania,Bucharest
-Russia,Moscow
 Russia,Moscow
 Rwanda,Kigali
 Saint Kitts and Nevis,Basseterre
@@ -172,7 +170,6 @@ Sweden,Stockholm
 Switzerland,Bern
 Syria,Damascus
 Taiwan,Taipei
-Taiwan,Taipei
 Tajikistan,Dushanbe
 Tanzania,Dar es Salaam, Dodoma
 Thailand,Bangkok
@@ -181,7 +178,6 @@ Togo,Lome
 Tonga,Nuku’alofa
 Trinidad and Tobago,Port of Spain
 Tunisia,Tunis
-Turkey,Ankara
 Turkey,Ankara
 Turkmenistan,Asgabat
 Turks and Caicos,Cockburn Town
