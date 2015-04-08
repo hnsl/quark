@@ -1,5 +1,6 @@
 #include "rcd.h"
 #include "linux.h"
+#include "hmap.h"
 #include "acid.h"
 #include "../src/quark-internal.h"
 #include "ifc.h"
@@ -8,6 +9,15 @@
 
 list(fstr_t)* vis_snaps;
 lwt_heap_t* vis_heap;
+
+static uint64_t test_hash64(void* key, uint64_t len, uint64_t seed) {
+    return hmap_murmurhash_64a(key, len, seed);
+}
+
+
+static uint64_t test_hash64_2n(uint64_t x, uint64_t y) {
+    return test_hash64(&x, sizeof(x), y);
+}
 
 static void vis_init() {
     vis_heap = lwt_alloc_heap();
@@ -42,7 +52,7 @@ static fstr_t test_get_db_path() {
     return concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64());
 }
 
-static void test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah) {
+static void test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah, qk_opt_t* set_opt) {
     fstr_t data_path = concs(db_path, ".data");
     fstr_t journal_path = concs(db_path, ".jrnl");
     acid_h* ah = acid_open(data_path, journal_path, ACID_ADDR_0, 0);
@@ -52,6 +62,8 @@ static void test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah)
         // Very low target ipp for testing.
         .target_ipp = 4,
     };
+    if (set_opt != 0)
+        opt = *set_opt;
     qk_ctx_t* qk = qk_open(ah, &opt);
     *out_qk = qk;
     *out_ah = ah;
@@ -69,7 +81,7 @@ static void test0() { sub_heap {
     qk_ctx_t* qk;
     acid_h* ah;
     fstr_t db_path = test_get_db_path();
-    test_open_new_qk(db_path, &qk, &ah);
+    test_open_new_qk(db_path, &qk, &ah, 0);
     //x-dbg/ vis_snapshot(qk);
     qk_insert(qk, "50", "fifty");
     qk_insert(qk, "25", "twentyfive");
@@ -104,7 +116,7 @@ static void test1() { sub_heap {
     qk_ctx_t* qk;
     acid_h* ah;
     fstr_t db_path = test_get_db_path();
-    test_open_new_qk(db_path, &qk, &ah);
+    test_open_new_qk(db_path, &qk, &ah, 0);
     //x-dbg/ vis_snapshot(qk);
     //x-dbg/ print_stats(qk);
     size_t n = 0;
@@ -149,9 +161,110 @@ static void test1() { sub_heap {
     test_rm_db(db_path);
 }}
 
+typedef struct cc_pair {
+    fstr_t capital;
+    fstr_t country;
+} cc_pair_t;
+
+static void cc_pair_vec_init(cc_pair_t* cc_vec, dict(fstr_t)* countries) {
+    size_t i = 0;
+    dict_foreach(countries, fstr_t, capital, country) {
+        cc_vec[i].capital = capital;
+        cc_vec[i].country = country;
+        i++;
+    }
+}
+
 static void test2() { sub_heap {
     rio_debug("running test2\n");
 
+    // Index capitals mapped to countries.
+    dict(fstr_t)* countries = new_dict(fstr_t);
+    extern fstr_t capitals;
+    for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) {
+        fstr_t country, capital;
+        if (!fstr_divide(row, ",", &country, &capital))
+            continue;
+        dict_inserta(countries, fstr_t, capital, country);
+    }
+
+    // Allocate vector of capital/country pairs.
+    size_t n_pairs = dict_count(countries, fstr_t);
+    cc_pair_t cc_vec[n_pairs];
+
+    qk_ctx_t* qk;
+    acid_h* ah;
+    fstr_t db_path = test_get_db_path();
+
+    // First, test 1000 different orders of inserts.
+    cc_pair_vec_init(cc_vec, countries);
+    for (size_t i = 0; i < 1000; i++) sub_heap {
+        if ((i % 100) == 0) {
+            rio_debug(concs("insert order #", i, "/1000\n"));
+        }
+        // Open database and begin insert.
+        test_open_new_qk(db_path, &qk, &ah, 0);
+        for (size_t src = 0; src < n_pairs; src++) {
+            fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
+            //x-dbg/ rio_debug(concs("inserting #", i, " [", capital, "] [", country, "]\n"));
+            atest(!qk_get(qk, capital, &r_country));
+            atest(qk_insert(qk, capital, country));
+            atest(qk_get(qk, capital, &r_country));
+            atest(fstr_equal(r_country, country));
+        }
+        // Shuffle the cc_vec.
+        for (size_t src = 0; src < n_pairs; src++) {
+            size_t dst = test_hash64_2n(i, src) % n_pairs;
+            FLIP(cc_vec[dst], cc_vec[src]);
+        }
+        // Verify that all key pairs exists.
+        for (size_t src = 0; src < n_pairs; src++) { sub_heap {
+            fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
+            atest(qk_get(qk, capital, &r_country));
+            atest(fstr_equal(r_country, country));
+            fstr_t corrupt_capital = concs(capital, "\xfe");
+            corrupt_capital.str[test_hash64_2n(i, src) % corrupt_capital.len]++;
+            atest(!qk_get(qk, corrupt_capital, &r_country));
+        }}
+        // Close database.
+        acid_close(ah);
+        // Remove database.
+        test_rm_db(db_path);
+    }
+
+    // Second, test 1000 different probability seeds.
+    cc_pair_vec_init(cc_vec, countries);
+    for (size_t i = 0; i < 1000; i++) sub_heap {
+        if ((i % 100) == 0) {
+            rio_debug(concs("height seed #", i, "/1000\n"));
+        }
+        // Open database and begin insert.
+        qk_opt_t opt = {
+            .dtrm_seed = 100 + i,
+        };
+        test_open_new_qk(db_path, &qk, &ah, &opt);
+        for (size_t src = 0; src < n_pairs; src++) {
+            fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
+            //x-dbg/ rio_debug(concs("inserting #", i, " [", capital, "] [", country, "]\n"));
+            atest(!qk_get(qk, capital, &r_country));
+            atest(qk_insert(qk, capital, country));
+            atest(qk_get(qk, capital, &r_country));
+            atest(fstr_equal(r_country, country));
+        }
+        // Verify that all key pairs exists.
+        for (size_t src = 0; src < n_pairs; src++) { sub_heap {
+            fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
+            atest(qk_get(qk, capital, &r_country));
+            atest(fstr_equal(r_country, country));
+            fstr_t corrupt_capital = concs(capital, "\xfe");
+            corrupt_capital.str[test_hash64_2n(i, src) % corrupt_capital.len]++;
+            atest(!qk_get(qk, corrupt_capital, &r_country));
+        }}
+        // Close database.
+        acid_close(ah);
+        // Remove database.
+        test_rm_db(db_path);
+    }
 }}
 
 void rcd_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
