@@ -214,7 +214,7 @@ static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, uint8_t level, qk_part_t* part,
 /// Expands partition so one more entity can be inserted.
 /// Translate target index after reallocation is complete and returns the new partition.
 static qk_part_t* qk_part_insert_expand(qk_ctx_t* ctx, uint8_t level, qk_part_t* part, uint64_t req_space, qk_idx_t** io_idxT) {
-    DBGFN("reallocating partition ", part);
+    //x-dbg/ DBGFN("reallocating partition ", part);
     // We must reallocate the partition so we can have room for insert.
     void* old_part_ptr = part;
     uint64_t old_size = part->total_size;
@@ -341,7 +341,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             break;
         insert_lvl++;
     } while (insert_lvl < LENGTHOF(hdr->root) - 1);
-    DBGFN("inserting [", key, "] => [", value, "] on level #", insert_lvl);
+    //x-dbg/ DBGFN("inserting [", key, "] => [", value, "] on level #", insert_lvl);
     // We have generated a fair insert level and is ready to begin insert.
     // Read phase: Search from top level to:
     //  1) Resolve target partitions to insert on.
@@ -460,13 +460,13 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 // No left down pointer update required.
                 partL = part;
                 // We allocate the right partition and insert on instead so no data move is required.
-                DBGFN("new splitting partition ", part, " on level #", i_lvl);
+                //x-dbg/ DBGFN("new splitting partition ", part, " on level #", i_lvl);
                 partR = qk_part_alloc_new(ctx, i_lvl, req_space);
                 qk_part_insert_entry(hdr, i_lvl, partR, 0, key, value, 0, &next_downR);
             } else {
                 // Standard "hard" split.
                 // Calculate required space for new left and right partition.
-                DBGFN("hard splitting partition ", part, " on level #", i_lvl);
+                //x-dbg/ DBGFN("hard splitting partition ", part, " on level #", i_lvl);
                 assert(idxT != 0);
                 uint64_t spaceL = qk_space_range_level(i_lvl, idx0, idxT);
                 // Allocate new left partition.

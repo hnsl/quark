@@ -38,9 +38,13 @@ static void print_stats(qk_ctx_t* qk) { sub_heap {
     DBGFN(fss(json_stringify_pretty(qk_get_stats(qk))));
 }}
 
-static void test_open_new_qk(qk_ctx_t** out_qk, acid_h** out_ah) {
-    fstr_t data_path = concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64(), ".data");
-    fstr_t journal_path = concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64(), ".jrnl");
+static fstr_t test_get_db_path() {
+    return concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64());
+}
+
+static void test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah) {
+    fstr_t data_path = concs(db_path, ".data");
+    fstr_t journal_path = concs(db_path, ".jrnl");
     acid_h* ah = acid_open(data_path, journal_path, ACID_ADDR_0, 0);
     qk_opt_t opt = {
         // Allow test to be deterministic.
@@ -53,11 +57,20 @@ static void test_open_new_qk(qk_ctx_t** out_qk, acid_h** out_ah) {
     *out_ah = ah;
 }
 
+static void test_rm_db(fstr_t db_path) { sub_heap {
+    fstr_t data_path = concs(db_path, ".data");
+    fstr_t journal_path = concs(db_path, ".jrnl");
+    rio_file_unlink(data_path);
+    rio_file_unlink(journal_path);
+}}
+
 static void test0() { sub_heap {
+    rio_debug("running test0\n");
     qk_ctx_t* qk;
     acid_h* ah;
-    test_open_new_qk(&qk, &ah);
-    //vis_snapshot(qk);
+    fstr_t db_path = test_get_db_path();
+    test_open_new_qk(db_path, &qk, &ah);
+    //x-dbg/ vis_snapshot(qk);
     qk_insert(qk, "50", "fifty");
     qk_insert(qk, "25", "twentyfive");
     qk_insert(qk, "75", "seventyfive");
@@ -68,7 +81,7 @@ static void test0() { sub_heap {
     qk_insert(qk, "80", "eighty");
     qk_insert(qk, "10", "ten");
     qk_insert(qk, "20", "twenty");
-    //vis_snapshot(qk);
+    //x-dbg/ vis_snapshot(qk);
     qk_insert(qk, "51", "fiftyone");
     qk_insert(qk, "26", "twentysix");
     qk_insert(qk, "76", "seventysix");
@@ -79,19 +92,21 @@ static void test0() { sub_heap {
     qk_insert(qk, "81", "eightyone");
     qk_insert(qk, "11", "eleven");
     qk_insert(qk, "21", "twentyone");
-    //vis_snapshot(qk);
-    //vis_render(qk);
+    //x-dbg/ vis_snapshot(qk);
+    //x-dbg/ vis_render(qk);
     acid_fsync(ah);
     acid_close(ah);
+    test_rm_db(db_path);
 }}
 
-
 static void test1() { sub_heap {
+    rio_debug("running test1\n");
     qk_ctx_t* qk;
     acid_h* ah;
-    test_open_new_qk(&qk, &ah);
-    vis_snapshot(qk);
-    print_stats(qk);
+    fstr_t db_path = test_get_db_path();
+    test_open_new_qk(db_path, &qk, &ah);
+    //x-dbg/ vis_snapshot(qk);
+    //x-dbg/ print_stats(qk);
     size_t n = 0;
     extern fstr_t capitals;
     bool found_andorra = false;
@@ -116,21 +131,26 @@ static void test1() { sub_heap {
             atest(!qk_get(qk, "Andorra la Vella", &value));
         }
     }
-    vis_snapshot(qk);
-    vis_render(qk);
-    print_stats(qk);
+    //x-dbg/ vis_snapshot(qk);
+    //x-dbg/ vis_render(qk);
+    //x-dbg/ print_stats(qk);
     for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
         fstr_t country, capital;
         if (!fstr_divide(row, ",", &country, &capital))
             continue;
         fstr_t value;
-        DBGFN("looking up [", capital, "]");
+        //x-dbg/ rio_debug(concs("looking up [", capital, "]"));
         atest(qk_get(qk, capital, &value));
         atest(fstr_equal(value, country));
         atest(!qk_get(qk, concs(capital, "\x00"), &value));
     }}
     acid_fsync(ah);
     acid_close(ah);
+    test_rm_db(db_path);
+}}
+
+static void test2() { sub_heap {
+    rio_debug("running test2\n");
 
 }}
 
@@ -138,6 +158,7 @@ void rcd_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
     vis_init();
     test0();
     test1();
-    rio_debug("tests done");
+    test2();
+    rio_debug("tests done\n");
     exit(0);
 }
