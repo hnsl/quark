@@ -28,8 +28,8 @@
             "output": "quark.test",
             "library": "",
             "resources": {
-		    "vis_tpl": "res/visualize.html",
-		    "capitals": "res/capitals.txt"
+			    "vis_tpl": "res/visualize.html",
+			    "capitals": "res/capitals.txt"
             },
             "dependency-build-mask": "debug",
             "additional-src-dirs": ["tests"],
@@ -37,6 +37,21 @@
             "pp-flags": [
                 "-DDEBUG"
             ]
+        },
+        "otest": {
+            "output": "quark.otest",
+            "library": "",
+            "resources": {
+			    "vis_tpl": "res/visualize.html",
+			    "capitals": "res/capitals.txt"
+            },
+            "dependency-build-mask": "release",
+            "additional-src-dirs": ["tests"],
+            "include": ["src"],
+            "o-flags": ["-O1"],
+            "o-env": {
+                "LLC_ARGS": "-O1"
+            }
         }
     }
 }
