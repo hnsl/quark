@@ -36,7 +36,7 @@ static void qk_vis_part(
             {"from", part_id},
             {"to", node_id},
         ));
-        fstr_t key = fss(fstr_hexencode(fstr_slice(qk_idx_get_key(idxC), 0, 4)));
+        fstr_t key = qk_idx_get_key(idxC); // fss(fstr_hexencode(fstr_slice(qk_idx_get_key(idxC), 0, 4)));
         if (level > 0) {
             json_append(nodes, jobj_new(
                 {"group", jstr("key-node")},
@@ -46,7 +46,7 @@ static void qk_vis_part(
             qk_part_t* cpart = *qk_idx1_get_down_ptr(idxC);
             qk_vis_part(ctx, level - 1, cpart, nodes, edges, node_id, visited);
         } else {
-            fstr_t value = fss(fstr_hexencode(fstr_slice(qk_idx0_get_value(idxC), 0, 4)));
+            fstr_t value = qk_idx0_get_value(idxC); //fss(fstr_hexencode(fstr_slice(qk_idx0_get_value(idxC), 0, 4)));
             json_append(nodes, jobj_new(
                 {"group", jstr("value-node")},
                 {"id", node_id},

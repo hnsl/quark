@@ -29,7 +29,15 @@ typedef struct qk_opt {
 /// Quark context.
 typedef struct qk_ctx qk_ctx_t;
 
+/// Updates a single value in the quark database with the specified key.
+/// Returns false if the key does not exist.
+/// This function is optimized to mutate values, not remove them or to save space
+/// by shrinking them. Quark does currently not support removing key/value pairs
+/// or freeing already reserved space.
+bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value);
+
 /// Fetches a single value from the quark database from the specified key.
+/// Returns false if the key does not exist.
 bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value);
 
 /// Inserts a key/value pair into quark database.

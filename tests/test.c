@@ -156,6 +156,81 @@ static void test1() { sub_heap {
         atest(fstr_equal(value, country));
         atest(!qk_get(qk, concs(capital, "\x00"), &value));
     }}
+    // Test update.
+    {
+        size_t i = 0;
+        for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
+            fstr_t country, capital;
+            if (!fstr_divide(row, ",", &country, &capital))
+                continue;
+            // Test update non-existing key.
+            atest(!qk_update(qk, concs(capital, "\x00"), capital));
+            if ((i % 3) == 0) {
+                // Test value expand.
+                fstr_t new_value = concs(capital, " of ", country);
+                //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
+                atest(qk_update(qk, capital, new_value));
+                fstr_t value;
+                atest(qk_get(qk, capital, &value));
+                atest(fstr_equal(value, new_value));
+            } else if ((i % 3) == 1) {
+                // Test value shrink.
+                fstr_t new_value = fstr_slice(capital, 0, 3);
+                //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
+                atest(qk_update(qk, capital, new_value));
+                fstr_t value;
+                atest(qk_get(qk, capital, &value));
+                atest(fstr_equal(value, new_value));
+            } else {
+                // Test value replace.
+                fstr_t new_value = fss(fstr_reverse(country));
+                //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
+                atest(qk_update(qk, capital, new_value));
+                fstr_t value;
+                atest(qk_get(qk, capital, &value));
+                atest(fstr_equal(value, new_value));
+            }
+            // For each iteration, verify all key/value mappings.
+            {
+                size_t j = 0;
+                for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
+                    fstr_t country, capital;
+                    if (!fstr_divide(row, ",", &country, &capital))
+                        continue;
+                    if (j <= i) {
+                        fstr_t value;
+                        //x-dbg/ rio_debug(concs("looking up [", capital, "]"));
+                        atest(qk_get(qk, capital, &value));
+                        fstr_t expect_value;
+                        if ((j % 3) == 0) {
+                            expect_value = concs(capital, " of ", country);
+                        } else if ((j % 3) == 1) {
+                            expect_value = fstr_slice(capital, 0, 3);
+                        } else {
+                            expect_value = fss(fstr_reverse(country));
+                        }
+                        atest(fstr_equal(value, expect_value));
+                        j++;
+                    }
+                }}
+            }{
+                size_t j = 0;
+                for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
+                    fstr_t country, capital;
+                    if (!fstr_divide(row, ",", &country, &capital))
+                        continue;
+                    if (j > i) {
+                        fstr_t value;
+                        //x-dbg/ rio_debug(concs("looking up [", capital, "]"));
+                        atest(qk_get(qk, capital, &value));
+                        atest(fstr_equal(value, country));
+                    }
+                    j++;
+                }}
+            }
+            i++;
+        }}
+    }
     acid_fsync(ah);
     acid_close(ah);
     test_rm_db(db_path);
@@ -358,7 +433,7 @@ static void test_128g(fstr_t db_path) { sub_heap {
             (target_bytes / 1024 / 1024), "] mb, total snapshots: [", total_snaps, "]\n"));
         if (total_alloc >= target_bytes)
             goto done;
-        size_t n_inserts = 200000;
+        size_t n_inserts = 20000;
 
         /*rio_debug(concs("writing maps\n"));
         rio_write_file_contents("/tmp/maps_a", rio_read_virtual_file_contents("/proc/self/maps", maps_buffer));*/
@@ -397,10 +472,19 @@ static void test_128g(fstr_t db_path) { sub_heap {
             fstr_t key = get_ent_key(ent_id);
 
             fstr_t value = get_ent_value(ent_id), r_value;
-            //x-dbg/ rio_debug(concs("inserting [", fss(fstr_hexencode(fstr_slice(key, 0, 8))), "] => [", fss(fstr_hexencode(fstr_slice(value, 0, 8))), "] (entry #", ent_id, ")!\n"));
-            if (!qk_insert(qk, key, value)) {
-                rio_debug(concs("key conflict for [", fss(fstr_hexencode(key)), "] (entry #", ent_id, ")!\n"));
-                lwt_exit(1);
+
+            if ((i % 40) != 0) {
+                //x-dbg/ rio_debug(concs("inserting [", fss(fstr_hexencode(fstr_slice(key, 0, 8))), "] => [", fss(fstr_hexencode(fstr_slice(value, 0, 8))), "] (entry #", ent_id, ")!\n"));
+                if (!qk_insert(qk, key, value)) {
+                    rio_debug(concs("key conflict for [", fss(fstr_hexencode(key)), "] (entry #", ent_id, ")!\n"));
+                    lwt_exit(1);
+                }
+            } else {
+                // Every 40th insert we first insert the wrong value and then update to the right value to stress test update.
+                fstr_t wrong_value = get_ent_value(ent_id + 1);
+                atest(qk_insert(qk, key, wrong_value));
+                // Since we don't sync in between the wrong value should never be visible when reopening the database.
+                atest(qk_update(qk, key, value));
             }
             atest(qk_get(qk, key, &r_value));
             atest(fstr_equal(value, r_value));
