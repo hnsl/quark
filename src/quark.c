@@ -273,7 +273,14 @@ static void qk_check_keylen(fstr_t key) {
     }
 }
 
-bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
+typedef struct lookup_res {
+    bool found;
+    qk_idx_t* idx0;
+    qk_idx_t* idxE;
+    qk_idx_t* idxT;
+} lookup_res_t;
+
+static inline lookup_res_t qk_lookup(qk_ctx_t* ctx, fstr_t key) {
     qk_check_keylen(key);
     qk_hdr_t* hdr = ctx->hdr;
     bool following_root = true;
@@ -294,14 +301,19 @@ bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
                 part = *qk_idx1_get_down_ptr(idxT);
                 idxT = qk_part_get_idx0(part);
             }
-            // Return value.
-            *out_value = qk_idx0_get_value(idxT);
-            return true;
+            return (lookup_res_t) {
+                .found = true,
+                .idx0 = idx0,
+                .idxE = idxE,
+                .idxT = idxT,
+            };
         }
         // Travel further.
         if (i_lvl == 0) {
             // Key was not found.
-            return false;
+            return (lookup_res_t) {
+                .found = false,
+            };
         } else if (i_lvl > 0) {
             // Determine how to reference the next level.
             if (idxT == idx0) {
@@ -314,6 +326,16 @@ bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
                 following_root = false;
             }
         }
+    }
+}
+
+bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
+    lookup_res_t r = qk_lookup(ctx, key);
+    if (r.found) {
+        *out_value = qk_idx0_get_value(r.idxT);
+        return true;
+    } else {
+        return false;
     }
 }
 
