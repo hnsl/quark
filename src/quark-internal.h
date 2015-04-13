@@ -159,6 +159,6 @@ static inline qk_idx_t* qk_part_get_idx0(qk_part_t* part) {
 }
 
 /// Returns the start write pointer (at first allocated byte) in partition tail.
-static inline qk_idx_t* qk_part_get_write0(qk_part_t* part) {
+static inline void* qk_part_get_write0(qk_part_t* part) {
     return ((void*) part) + part->total_size - part->data_size;
 }
