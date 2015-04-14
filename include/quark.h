@@ -53,4 +53,9 @@ json_value_t qk_get_stats(qk_ctx_t* ctx);
 /// To close the quark database just fsync the acid handle as required and free the context.
 qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt);
 
+/// Compiles a multi-dimensional quark key. The returned key has the property that it's a
+/// single string but each individual part will be separated so each part is considered
+/// first in sequence when keys are lexicographically compared.
+fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts);
+
 #endif

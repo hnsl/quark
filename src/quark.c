@@ -708,3 +708,11 @@ qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
     // Return with context.
     return ctx;
 }
+
+fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts) { sub_heap {
+    fstr_t* new_parts = lwt_alloc_new(sizeof(fstr_t) * n_parts);
+    for (size_t i = 0; i < n_parts; i++) {
+        new_parts[i] = fss(fstr_replace(parts[i], "\x00", "\x00\x01"));
+    }
+    return escape(fstr_concat(new_parts, n_parts, "\x00\x00"));
+}}
