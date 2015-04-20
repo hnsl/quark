@@ -280,45 +280,85 @@ static void qk_check_keylen(fstr_t key) {
 }
 
 typedef struct lookup_res {
-    qk_idx_t* idxT;
+    /// Reference to level 0 partition if found.
     qk_part_t** ref;
-    qk_part_t* part;
+    struct {
+        /// Target partition to insert or split.
+        qk_part_t* part;
+        /// Target index slot to insert key.
+        qk_idx_t* idxT;
+    } target[8];
 } lookup_res_t;
 
-static bool qk_lookup(qk_ctx_t* ctx, fstr_t key, lookup_res_t* out_r) {
+typedef enum lookup_mode {
+    lookup_mode_key,
+    lookup_mode_first,
+    lookup_mode_last,
+} lookup_mode_t;
+
+/// Quark lookup with specified mode.
+/// When insert_target is true the returned index targets on non-matching levels will be the index after the
+/// down index where an insert would be made, otherwise the index for those levels will be the down index.
+/// The down index will be one index less than idx0 when following the root.
+static inline bool qk_lookup(qk_ctx_t* ctx, lookup_mode_t mode, fstr_t key, bool insert_target, lookup_res_t* out_r) {
     qk_check_keylen(key);
     qk_hdr_t* hdr = ctx->hdr;
+    CASSERT(LENGTHOF(out_r->target) == LENGTHOF(hdr->root));
     bool following_root = true;
     qk_part_t** ref;
     qk_part_t* part;
     for (size_t i_lvl = LENGTHOF(hdr->root) - 1;; i_lvl--) {
+        // Resolve partition and register it.
         if (following_root) {
             ref = &hdr->root[i_lvl];
             part = *ref;
         }
-        // Resolve partition.
         assert(part != 0);
+        out_r->target[i_lvl].part = part;
         // Search partition index.
         qk_idx_t* idx0 = qk_part_get_idx0(part);
         qk_idx_t* idxE = idx0 + part->n_keys;
         qk_idx_t* idxT;
-        if (qk_idx_lookup(idx0, idxE, key, &idxT)) {
-            // Key found. Fast travel to value.
-            for (; i_lvl > 0; i_lvl--) {
+        bool found;
+        switch (mode) {{
+        } case lookup_mode_key: {
+            // Normal key compare lookup with binary search.
+            found = qk_idx_lookup(idx0, idxE, key, &idxT);
+            break;
+        } case lookup_mode_first: {
+            // Simulate lookup with infinitely small key.
+            idxT = idx0;
+            found = false;
+            break;
+        } case lookup_mode_last: {
+            // Simulate lookup with infinitely big key.
+            idxT = idxE;
+            found = false;
+            break;
+        }}
+        // Fast travel to value when key is found.
+        if (found) {
+            out_r->target[i_lvl].idxT = idxT;
+            while (i_lvl > 0) {
                 ref = qk_idx1_get_down_ptr(idxT);
                 part = *ref;
                 idxT = qk_part_get_idx0(part);
+                i_lvl--;
+                out_r->target[i_lvl].part = part;
+                out_r->target[i_lvl].idxT = idxT;
             }
-            out_r->idxT = idxT;
             out_r->ref = ref;
-            out_r->part = part;
             return true;
         }
         // Travel further.
         if (i_lvl == 0) {
+            out_r->target[i_lvl].idxT = idxT;
             // Key was not found.
             return false;
         } else if (i_lvl > 0) {
+            // Register down index.
+            qk_idx_t* idxD = (idxT - 1);
+            out_r->target[i_lvl].idxT = (insert_target? idxT: idxD);
             // Determine how to reference the next level.
             if (idxT == idx0) {
                 // This partition is too high, keep following root.
@@ -326,22 +366,23 @@ static bool qk_lookup(qk_ctx_t* ctx, fstr_t key, lookup_res_t* out_r) {
             } else {
                 // We follow the key that is immediately lower than the key
                 // we are looking up to get to the next partition.
-                ref = qk_idx1_get_down_ptr(idxT - 1);
+                ref = qk_idx1_get_down_ptr(idxD);
                 part = *ref;
                 following_root = false;
             }
         }
     }
-    return true;
 }
 
 bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
     lookup_res_t r;
-    if (!qk_lookup(ctx, key, &r)) {
+    if (!qk_lookup(ctx, lookup_mode_key, key, false, &r)) {
         // Update require key to exist.
         return false;
     }
-    fstr_t cur_value = qk_idx0_get_value(r.idxT);
+    qk_part_t* part = r.target[0].part;
+    qk_idx_t* idxT = r.target[0].idxT;
+    fstr_t cur_value = qk_idx0_get_value(idxT);
     if (new_value.len == cur_value.len) {
         // Replace in-place.
         if (cur_value.len > 0) {
@@ -350,50 +391,50 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
     } else { // (new_value.len != cur_value.len)
         // Delete the entry data by moving everything on the left into it.
         {
-            size_t ent_dsize = qk_space_idx_data_level(0, r.idxT);
-            void* d_beg = qk_part_get_write0(r.part);
-            void* d_end = r.idxT->keyptr;
+            size_t ent_dsize = qk_space_idx_data_level(0, idxT);
+            void* d_beg = qk_part_get_write0(part);
+            void* d_end = idxT->keyptr;
             assert(d_beg <= d_end);
             //x-dbg/ DPRINT("moving ", d_beg, " to ", d_end, " [", ent_dsize, "] b forward");
             if (d_beg < d_end) {
                 memmove(d_beg + ent_dsize, d_beg, d_end - d_beg);
                 // Move all lower pointers forward.
-                qk_idx_t* idx0 = qk_part_get_idx0(r.part);
-                qk_idx_t* idxE = idx0 + r.part->n_keys;
+                qk_idx_t* idx0 = qk_part_get_idx0(part);
+                qk_idx_t* idxE = idx0 + part->n_keys;
                 for (qk_idx_t* idxC = idx0; idxC < idxE; idxC++) {
                     if ((void*) idxC->keyptr < d_end) {
                         idxC->keyptr += ent_dsize;
                     }
                 }
             }
-            r.part->data_size -= ent_dsize;
+            part->data_size -= ent_dsize;
         }
         // Insert the new value now.
         {
             if (new_value.len > cur_value.len) {
                 // Expand may be required.
                 //x-dbg/ DPRINT("may require expand: ", new_value.len, " > ", cur_value.len);
-                uint64_t free_space = qk_part_free_space(r.part);
+                uint64_t free_space = qk_part_free_space(part);
                 uint64_t req_space = qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t);
                 if (free_space < req_space) {
                     //x-dbg/ DPRINT("expand required: ", req_space, " > ", free_space);
                     // Reallocate the partition to expand it and translate the index target.
-                    qk_part_t* new_part = qk_part_insert_expand(ctx, 0, r.part, req_space, &r.idxT);
+                    qk_part_t* new_part = qk_part_insert_expand(ctx, 0, part, req_space, &idxT);
                     // Update old partition reference (root pointer or a down pointer) to point to new partition.
-                    assert(*r.ref == r.part);
+                    assert(*r.ref == part);
                     *r.ref = new_part;
-                    r.part = new_part;
+                    part = new_part;
                 }
             }
             // Write the new data.
             //x-dbg/ DPRINT("writing new data");
-            assert(qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t) <= qk_part_free_space(r.part));
-            void* write0 = qk_part_get_write0(r.part);
+            assert(qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t) <= qk_part_free_space(part));
+            void* write0 = qk_part_get_write0(part);
             void* writeD = qk_write_entry_data(0, write0, key, new_value, 0);
             // Write the new pointer.
-            r.idxT->keyptr = writeD;
+            idxT->keyptr = writeD;
             // Adjust data size.
-            r.part->data_size += (write0 - writeD);
+            part->data_size += (write0 - writeD);
         }
     }
     return true;
@@ -401,12 +442,264 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
 
 bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
     lookup_res_t r;
-    if (qk_lookup(ctx, key, &r)) {
-        *out_value = qk_idx0_get_value(r.idxT);
+    if (qk_lookup(ctx, lookup_mode_key, key, false, &r)) {
+        *out_value = qk_idx0_get_value(r.target[0].idxT);
         return true;
     } else {
         return false;
     }
+}
+
+bool qk_band_read(fstr_t* io_mem, fstr_t* out_key, fstr_t* out_value) {
+    if (io_mem->len == 0)
+        return false;
+    fstr_t band = *io_mem;
+    // Determine key/value location from offsets on band.
+    uint16_t keylen = *((uint16_t*) band.str);
+    fstr_t key = {
+        .str = band.str + sizeof(uint16_t),
+        .len = keylen
+    };
+    uint64_t* valuelen_ptr = (void*) (key.str + key.len);
+    uint8_t* valuestr = (void*) (valuelen_ptr + 1);
+    fstr_t value = {
+        .str = valuestr,
+        .len = *valuelen_ptr
+    };
+    // Update band.
+    void* next_ptr = value.str + value.len;
+    uint64_t raw_band_len = next_ptr - (void*) band.str;
+    *io_mem = fstr_slice(band, raw_band_len, -1);
+    // Return key/value.
+    *out_key = key;
+    *out_value = value;
+    return true;
+}
+
+/// Seek forward to next level 0 partition with appropriate side
+/// effects on lookup result.
+bool qk_seek_lvl0_part_fwd(lookup_res_t* r, uint8_t level) {
+    while (level < LENGTHOF(r->target)) {
+        // Get level position and target index.
+        qk_part_t* part = r->target[level].part;
+        if (part->n_keys == 0)
+            goto next_lvl;
+        qk_idx_t* idxT = r->target[level].idxT;
+        qk_idx_t* idx0 = qk_part_get_idx0(part);
+        qk_idx_t* idxE = idx0 + part->n_keys;
+        // Seek forward in index to next key.
+        idxT++;
+        if (idxT < idxE) {
+            r->target[level].idxT = idxT;
+            // Seek down to level 0 and set offset to first index.
+            while (level > 0) {
+                level--;
+                part = *qk_idx1_get_down_ptr(idxT);
+                assert(part->n_keys > 0);
+                idxT = qk_part_get_idx0(part);
+                r->target[level].part = part;
+                r->target[level].idxT = idxT;
+            }
+            return true;
+        }
+        next_lvl:
+        level++;
+    }
+    return false;
+}
+
+/// Seek backward to previous level 0 partition with appropriate side
+/// effects on lookup result.
+bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
+    qk_hdr_t* hdr = ctx->hdr;
+    while (level < LENGTHOF(r->target)) {
+        // Get level position and target index.
+        qk_part_t* part = r->target[level].part;
+        new_root_lvl_inject:;
+        if (part->n_keys == 0)
+            goto next_lvl;
+        qk_idx_t* idxT = r->target[level].idxT;
+        qk_idx_t* idx0 = qk_part_get_idx0(part);
+        qk_idx_t* idxE = idx0 + part->n_keys;
+        // Seek backward in index to previous key.
+        idxT--;
+        if (idxT >= idx0) {
+            r->target[level].idxT = idxT;
+            // Seek down to level 0 and set offset to last index.
+            while (level > 0) {
+                level--;
+                part = *qk_idx1_get_down_ptr(idxT);
+                assert(part->n_keys > 0);
+                idxT = qk_part_get_idx0(part) + part->n_keys - 1;
+                r->target[level].part = part;
+                r->target[level].idxT = idxT;
+            }
+            return true;
+        }
+        next_lvl:
+        if (part == hdr->root[level]) {
+            // Reached smallest key/value pair supported by this root level.
+            // Need to travel to lower root.
+            if (level == 0)
+                break;
+            level--;
+            part = hdr->root[level];
+            r->target[level].part = part;
+            r->target[level].idxT = qk_part_get_idx0(part) + part->n_keys;
+            goto new_root_lvl_inject;
+        } else {
+            // Not reached root entry partition yet, travel up.
+            level++;
+        }
+    }
+    return false;
+}
+
+static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* ent_count, uint64_t limit) {
+    // Check if we have reached the limit for the number of items we may scan.
+    if (limit > 0 && *ent_count >= limit)
+        return false;
+    // Check if we have space on remaining band to do the copy.
+    size_t dsize = qk_space_idx_data_level(0, idxT);
+    size_t req_space = sizeof(uint16_t) + dsize;
+    if (band_tail->len < req_space)
+        return false;
+    // Quickly copy over u16 keylen and value blob.
+    *((uint16_t*) band_tail->str) = idxT->keylen;
+    band_tail->str += sizeof(uint16_t);
+    memcpy(band_tail->str, idxT->keyptr, dsize);
+    // Update band tail and entry count.
+    band_tail->str += dsize;
+    band_tail->len -= req_space;
+    *ent_count = *ent_count + 1;
+    // Need only continue scan if we are allowed to write more items to band.
+    return (limit == 0 || *ent_count < limit);
+}
+
+uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) {
+    // Initialize default return values.
+    bool end_of_file = false;
+    uint64_t ent_count = 0;
+    fstr_t band = *io_mem;
+    fstr_t band_tail = band;
+    lookup_res_t r;
+    bool start_equal;
+    if (op.with_start) {
+        // Initial lookup/seek to start key.
+        start_equal = qk_lookup(ctx, lookup_mode_key, op.key_start, false, &r);
+    } else {
+        // Initial lookup/seek to index start/end.
+        lookup_mode_t mode = op.descending? lookup_mode_last: lookup_mode_first;
+        qk_lookup(ctx, mode, "", false, &r);
+        // Made an infinite positive/negative lookup that never matches exactly.
+        start_equal = false;
+    }
+    // The lookup results looks up the insert location of the start key.
+    // However we are interested in the element before or after it.
+    // The relationship between these locations can be slightly complicated
+    // since the insert target could even be an index that doesn't exist.
+    if (!start_equal || !op.inc_start) {
+        // We did not match start key and could have an invalid insert position
+        // or we did. In both these cases we fix the problem by stepping in
+        // whatever direction we are configured to.
+        if (op.descending) {
+            // Descending seek, i.e. reverse.
+            // Target index is too high or at invalid, seek back.
+            if (!qk_seek_lvl0_part_rev(ctx, &r, 0)) {
+                end_of_file = true;
+                goto scan_done;
+            }
+        } else {
+            // Ascending seek, i.e. forward.
+            if (start_equal) {
+                // Step forward on lowest level to not include start.
+                if (!qk_seek_lvl0_part_fwd(&r, 0)) {
+                    end_of_file = true;
+                    goto scan_done;
+                }
+            } else {
+                // Need only step if at invalid offset.
+                qk_part_t* part = r.target[0].part;
+                qk_idx_t* idxT = r.target[0].idxT;
+                qk_idx_t* idx0 = qk_part_get_idx0(part);
+                qk_idx_t* idxE = idx0 + part->n_keys;
+                if (idxT == (idx0 - 1) || idxT == idxE) {
+                    // We can start step on level 1 since we already know level 0 is invalid.
+                    if (!qk_seek_lvl0_part_fwd(&r, 1)) {
+                        end_of_file = true;
+                        goto scan_done;
+                    }
+                } else {
+                    // Target index should already be valid.
+                    assert(idx0 <= idxT && idxT < idxE);
+                }
+            }
+        }
+    } else {
+        // We matched the start key so idxT is valid and it's also to be included in the scan.
+        assert(start_equal && op.inc_start);
+    }
+
+    // The idxT is valid now and positioned on the first element to scan.
+    for (;;) {
+        qk_part_t* part = r.target[0].part;
+        assert(part->n_keys > 0);
+        qk_idx_t* idxT = r.target[0].idxT;
+        qk_idx_t* idx0 = qk_part_get_idx0(part);
+        qk_idx_t* idxE = idx0 + part->n_keys;
+        assert(idx0 <= idxT && idxT < idxE);
+        // Iterate quickly through partition and scan to band.
+        for (;;) {
+            // Get key.
+            fstr_t key = qk_idx_get_key(idxT);
+            // Compare with end key.
+            if (op.with_end) {
+                int64_t cmp = fstr_cmp_lexical(key, op.key_end);
+                if (cmp == 0) {
+                    if (op.inc_end) {
+                        // Write end k/v pair to band.
+                        // Ignore out of band since we won't eof = true return anyway.
+                        qk_band_write(idxT, &band_tail, &ent_count, op.limit);
+                    }
+                    goto scan_done;
+                }
+                // Enforce end at end key.
+                if ((!op.descending && cmp > 0) || (op.descending && cmp < 0)) {
+                    goto scan_done;
+                }
+            }
+            // Write k/v pair to band.
+            if (!qk_band_write(idxT, &band_tail, &ent_count, op.limit)) {
+                goto scan_done;
+            }
+            // Go to next k/v pair.
+            if (op.descending) {
+                // Descending seek, i.e. reverse.
+                idxT--;
+                if (idxT < idx0) {
+                    if (!qk_seek_lvl0_part_rev(ctx, &r, 1)) {
+                        end_of_file = true;
+                        goto scan_done;
+                    }
+                    break;
+                }
+            } else {
+                // Ascending seek, i.e. forward.
+                idxT++;
+                if (idxT >= idxE) {
+                    if (!qk_seek_lvl0_part_fwd(&r, 1)) {
+                        end_of_file = true;
+                        goto scan_done;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    scan_done:
+    *io_mem = fstr_detail(band, band_tail);
+    *out_eof = end_of_file;
+    return ent_count;
 }
 
 bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {

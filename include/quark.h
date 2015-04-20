@@ -40,6 +40,46 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value);
 /// Returns false if the key does not exist.
 bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value);
 
+typedef struct qk_scan_op {
+    /// Start scan operation at this key.
+    fstr_t key_start;
+    /// End scan operation at this key.
+    fstr_t key_end;
+    /// Default scan (0) has no limit.
+    /// Set to non-zero to stop scan after this many entries read.
+    size_t limit;
+    /// Default scan is ascending. Set to true to scan in descending order.
+    bool descending;
+    /// Default scan ignores start key and starts on beginning of index
+    /// if ascending or end if descending.
+    /// Set to true to start scan at start key.
+    bool with_start;
+    /// Default scan ignores end key. Set to true to stop scan at end key.
+    bool with_end;
+    /// Default scan does not include entry matching start key.
+    /// Set to true to include start key match.
+    bool inc_start;
+    /// Default scan does not include entry matching end key.
+    /// Set to true to include end key match.
+    bool inc_end;
+} qk_scan_op_t;
+
+/// Reads out the next key/value pair from a band scanned by qk_scan() and
+/// seeks to the next pair. Returns false when reached end of band.
+bool qk_band_read(fstr_t* io_mem, fstr_t* out_key, fstr_t* out_value);
+
+/// Scan values out of the quark database with maximal efficiency
+/// (no random access), copying over key/values to a "band" with undefined
+/// format. The band must be parsed with qk_band_next().
+/// Memory to scan to should be passed via io_mem and will be cut off where
+/// the scan terminates. When the memory runs out during scan the function
+/// will return prematurely with a lower count than requested.
+/// The "out_eof" parameter is set to true if the scan is terminated by
+/// reaching the end of the index, otherwise it is set to false.
+/// The configuration for the scan is passed via "op".
+/// The function returns the number of key/value pairs copied to the band.
+uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof);
+
 /// Inserts a key/value pair into quark database.
 /// Will not attempt fsync or snapshot, caller is responsible for this.
 /// This function must be synchronized. Attempting to sync the database before the
