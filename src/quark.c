@@ -301,7 +301,8 @@ typedef enum lookup_mode {
 /// down index where an insert would be made, otherwise the index for those levels will be the down index.
 /// The down index will be one index less than idx0 when following the root.
 static inline bool qk_lookup(qk_ctx_t* ctx, lookup_mode_t mode, fstr_t key, bool insert_target, lookup_res_t* out_r) {
-    qk_check_keylen(key);
+    if (mode == lookup_mode_key)
+        qk_check_keylen(key);
     qk_hdr_t* hdr = ctx->hdr;
     CASSERT(LENGTHOF(out_r->target) == LENGTHOF(hdr->root));
     bool following_root = true;
