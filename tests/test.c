@@ -631,7 +631,7 @@ static fstr_t get_ent_value(uint64_t ent_id) {
     return value;
 }
 
-static void test_128g(fstr_t db_path) { sub_heap {
+static void test_128g(fstr_t db_path, bool scan) { sub_heap {
     // In this test we attempt to store 128 gibibytes of data.
     rio_debug("running test3 - the 128 GiB test\n");
     const uint64_t target_bytes = 128ULL * 1024 * 1024 * 1024;
@@ -669,7 +669,48 @@ static void test_128g(fstr_t db_path) { sub_heap {
             i_lvl++;
         }
         rio_debug(concs("allocated [", (total_alloc / 1024 / 1024), "/",
-            (target_bytes / 1024 / 1024), "] mb, total snapshots: [", total_snaps, "]\n"));
+            (target_bytes / 1024 / 1024), "] MiB, total snapshots: [", total_snaps, "]\n"));
+
+        if (scan) {
+            bool first = true;
+            fstr_t band_mem = fss(fstr_alloc_buffer(10000 * PAGE_SIZE));
+            rio_debug(concs("scanning with [", (band_mem.len), "] byte band\n"));
+            fstr_t prev_key = "";
+            size_t i = 0;
+            uint128_t d0 = rio_get_time_timer();
+            for (;;) {
+                fstr_t band = band_mem;
+                qk_scan_op_t op = {
+                    .with_start = !first,
+                    .key_start = prev_key,
+                    .inc_start = false
+                };
+                bool eof;
+                qk_scan(qk, op, &band, &eof);
+                for (;;) {
+                    fstr_t key, value;
+                    if (!qk_band_read(&band, &key, &value)) {
+                        rio_debug(concs("end of band, read [", i, "/", ent_seq, "] entries\n"));
+                        if (eof) {
+                            atest(i == ent_seq);
+                            uint128_t d1 = rio_get_time_timer();
+                            uint128_t dt = (d1 - d0);
+                            double dts = (dt / RIO_NS_MS) / 1000.0;
+                            rio_debug(concs("scan complete, took [", dts, "] sec\n"));
+                            rio_debug(concs("scan speed [", ((total_alloc / 1024. / 1024.) / dts), "] MiB/s, [", (ent_seq / dts), "] ents/s\n"));
+                            lwt_exit(0);
+                        }
+                        prev_key = fsc(key);
+                        break;
+                    }
+                    atest(fstr_cmp_lexical(key, prev_key) > 0);
+                    prev_key = key;
+                    i++;
+                }
+                first = false;
+            }
+        }
+
         if (total_alloc >= target_bytes)
             goto done;
         size_t n_inserts = 20000;
@@ -793,10 +834,14 @@ void rcd_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
     if (list_unpack(main_args, fstr_t, &arg0)) {
         (void) list_pop_start(main_args, fstr_t);
         if (fstr_equal(arg0, "128g")) {
-            fstr_t db_path;
-            if (!list_unpack(main_args, fstr_t, &db_path))
+            fstr_t db_path, op;
+            bool scan = false;
+            if (list_unpack(main_args, fstr_t, &db_path, &op)) {
+                scan = fstr_equal_case(op, "scan");
+            } else {
                 db_path = "";
-            test_128g(db_path);
+            }
+            test_128g(db_path, scan);
         } else {
             throw(concs("unknown test [", arg0, "]"), exception_io);
         }
