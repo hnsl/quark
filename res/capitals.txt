@@ -67,7 +67,6 @@ Greece,Athens
 Grenada,St George’s
 Guatemala,Guatemala
 Guinea,Conakry
-Guinea-Bissau,
 Guyana,Georgetown
 Haiti,Port-au-Prince
 Honduras,Tegucigalpa
