@@ -74,8 +74,9 @@ bool qk_band_read(fstr_t* io_mem, fstr_t* out_key, fstr_t* out_value);
 /// Memory to scan to should be passed via io_mem and will be cut off where
 /// the scan terminates. When the memory runs out during scan the function
 /// will return prematurely with a lower count than requested.
-/// The "out_eof" parameter is set to true if the scan is terminated by
-/// reaching the end of the index, otherwise it is set to false.
+/// The "out_eof" parameter is set to false if the scan is terminated early
+/// because the io_mem (band) runs out. In other cases the operation is
+/// completed, the end is reached and eof is set.
 /// The configuration for the scan is passed via "op".
 /// The function returns the number of key/value pairs copied to the band.
 uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof);

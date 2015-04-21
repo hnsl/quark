@@ -560,15 +560,18 @@ bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
     }
 }
 
-static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* ent_count, uint64_t limit) {
+static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* ent_count, uint64_t limit, bool* out_eof) {
     // Check if we have reached the limit for the number of items we may scan.
     if (limit > 0 && *ent_count >= limit)
         return false;
     // Check if we have space on remaining band to do the copy.
     size_t dsize = qk_space_idx_data_level(0, idxT);
     size_t req_space = sizeof(uint16_t) + dsize;
-    if (band_tail->len < req_space)
+    if (band_tail->len < req_space) {
+        // Buffer has run out. This is the only situation where we use false eof.
+        *out_eof = false;
         return false;
+    }
     // Quickly copy over u16 keylen and value blob.
     *((uint16_t*) band_tail->str) = idxT->keylen;
     band_tail->str += sizeof(uint16_t);
@@ -583,7 +586,8 @@ static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* en
 
 uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) {
     // Initialize default return values.
-    bool end_of_file = false;
+    // End of "file" is only set to false if band runs out.
+    bool end_of_file = true;
     uint64_t ent_count = 0;
     fstr_t band = *io_mem;
     fstr_t band_tail = band;
@@ -611,7 +615,6 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
             // Descending seek, i.e. reverse.
             // Target index is too high or at invalid, seek back.
             if (!qk_seek_lvl0_part_rev(ctx, &r, 0)) {
-                end_of_file = true;
                 goto scan_done;
             }
         } else {
@@ -619,7 +622,6 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
             if (start_equal) {
                 // Step forward on lowest level to not include start.
                 if (!qk_seek_lvl0_part_fwd(&r, 0)) {
-                    end_of_file = true;
                     goto scan_done;
                 }
             } else {
@@ -631,7 +633,6 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
                 if (idxT == (idx0 - 1) || idxT == idxE) {
                     // We can start step on level 1 since we already know level 0 is invalid.
                     if (!qk_seek_lvl0_part_fwd(&r, 1)) {
-                        end_of_file = true;
                         goto scan_done;
                     }
                 } else {
@@ -663,8 +664,7 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
                 if (cmp == 0) {
                     if (op.inc_end) {
                         // Write end k/v pair to band.
-                        // Ignore out of band since we won't eof = true return anyway.
-                        qk_band_write(idxT, &band_tail, &ent_count, op.limit);
+                        qk_band_write(idxT, &band_tail, &ent_count, op.limit, &end_of_file);
                     }
                     goto scan_done;
                 }
@@ -674,7 +674,7 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
                 }
             }
             // Write k/v pair to band.
-            if (!qk_band_write(idxT, &band_tail, &ent_count, op.limit)) {
+            if (!qk_band_write(idxT, &band_tail, &ent_count, op.limit, &end_of_file)) {
                 goto scan_done;
             }
             // Go to next k/v pair.
@@ -683,7 +683,6 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
                 idxT--;
                 if (idxT < idx0) {
                     if (!qk_seek_lvl0_part_rev(ctx, &r, 1)) {
-                        end_of_file = true;
                         goto scan_done;
                     }
                     break;
@@ -693,7 +692,6 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
                 idxT++;
                 if (idxT >= idxE) {
                     if (!qk_seek_lvl0_part_fwd(&r, 1)) {
-                        end_of_file = true;
                         goto scan_done;
                     }
                     break;

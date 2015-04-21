@@ -225,7 +225,7 @@ static void test1() { sub_heap {
                 size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
                 post_scan_mem = scan_mem;
                 atest(scan_n == limit);
-                atest(!eof);
+                atest(eof);
                 fstr_t key, value;
                 for (size_t i = 0; i < limit; i++) {
                     atest(qk_band_read(&scan_mem, &key, &value));
@@ -309,6 +309,7 @@ static void test1() { sub_heap {
                             );
                             */
                             size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+                            atest(eof);
 
                             ssize_t start_i = start > 0? start - 1: 0;
                             ssize_t end_i = end > 0? end - 1: total - 1;
@@ -317,7 +318,6 @@ static void test1() { sub_heap {
                             fstr_t key, value;
                             if (op.descending) {
                                 FLIP(start_i, end_i);
-                                bool expect_eof = (start_i == 0) && (!op.inc_start && !pm_start);
                                 for (ssize_t i = start_i; i >= end_i; i--) {
                                     if (i == start_i) {
                                         if (op.with_start && (!op.inc_start && !pm_start))
@@ -326,7 +326,6 @@ static void test1() { sub_heap {
                                     if (i == end_i) {
                                         if (op.with_end && (!op.inc_end || pm_end))
                                             continue;
-                                        expect_eof = !op.with_end;
                                     }
                                     // DBGFN("reading band, key #", i);
                                     if (!qk_band_read(&scan_mem, &key, &value)) {
@@ -341,9 +340,7 @@ static void test1() { sub_heap {
                                     rio_debug(concs("unexpected continuation of scan band, got key [", key, "] (#", (end_i + 1), ")\n"));
                                     atest(false);
                                 }
-                                atest(eof == expect_eof);
                             } else {
-                                bool expect_eof = (start_i >= total - 1) && (!op.inc_start || pm_start);
                                 for (ssize_t i = start_i; i <= end_i; i++) {
                                     if (i == start_i) {
                                         if (op.with_start && (!op.inc_start || pm_start))
@@ -352,7 +349,6 @@ static void test1() { sub_heap {
                                     if (i == end_i) {
                                         if (op.with_end && (!op.inc_end && !pm_end))
                                             continue;
-                                        expect_eof = !op.with_end || (i == total - 1 && pm_end);
                                     }
                                     // DBGFN("reading band, key #", i);
                                     if (!qk_band_read(&scan_mem, &key, &value)) {
@@ -367,7 +363,6 @@ static void test1() { sub_heap {
                                     rio_debug(concs("unexpected continuation of scan band, got key [", key, "] (#", (end_i + 1), ")\n"));
                                     atest(false);
                                 }
-                                atest(eof == expect_eof);
                             }
                             atest(scan_n == read_n);
                         }
