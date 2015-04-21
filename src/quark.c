@@ -513,7 +513,8 @@ bool qk_seek_lvl0_part_fwd(lookup_res_t* r, uint8_t level) {
 /// effects on lookup result.
 bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
     qk_hdr_t* hdr = ctx->hdr;
-    while (level < LENGTHOF(r->target)) {
+    for (;;) {
+        assert(level < LENGTHOF(r->target));
         // Get level position and target index.
         qk_part_t* part = r->target[level].part;
         new_root_lvl_inject:;
@@ -541,10 +542,14 @@ bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
         if (part == hdr->root[level]) {
             // Reached smallest key/value pair supported by this root level.
             // Need to travel to lower root.
-            if (level == 0)
-                break;
-            level--;
-            part = hdr->root[level];
+            do {
+                if (level == 0) {
+                    // We are done, nothing is lower.
+                    return false;
+                }
+                level--;
+                part = hdr->root[level];
+            } while (part == r->target[level].part);
             r->target[level].part = part;
             r->target[level].idxT = qk_part_get_idx0(part) + part->n_keys;
             goto new_root_lvl_inject;
@@ -553,7 +558,6 @@ bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
             level++;
         }
     }
-    return false;
 }
 
 static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* ent_count, uint64_t limit) {
