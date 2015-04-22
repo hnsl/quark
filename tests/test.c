@@ -111,6 +111,52 @@ static void test0() { sub_heap {
     test_rm_db(db_path);
 }}
 
+static void test01() { sub_heap {
+    rio_debug("running test01\n");
+    sub_heap {
+        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01"));
+        fstr_t p0, p1;
+        QUARK_KEY_DECOMPILE(key, &p0);
+        atest(fstr_equal(p0, "a\x00\x01"));
+        try {
+            QUARK_KEY_DECOMPILE(fsc(key), &p0, &p1);
+            atest(false);
+        } catch (exception_io, e);
+    }
+    sub_heap {
+        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01", "b\x00\x01"));
+        DBGFN(fss(fstr_ace_encode(key)));
+        fstr_t p0, p1, p2;
+        try {
+            QUARK_KEY_DECOMPILE(fsc(key), &p0);
+            atest(false);
+        } catch (exception_io, e);
+        QUARK_KEY_DECOMPILE(key, &p0, &p1);
+        atest(fstr_equal(p0, "a\x00\x01"));
+        atest(fstr_equal(p1, "b\x00\x01"));
+        try {
+            QUARK_KEY_DECOMPILE(fsc(key), &p0, &p1, &p2);
+            atest(false);
+        } catch (exception_io, e);
+    }
+    sub_heap {
+        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01", "", "b\x00\x01"));
+        fstr_t p0, p1, p2, p3;
+        try {
+            QUARK_KEY_DECOMPILE(fsc(key), &p0, &p1);
+            atest(false);
+        } catch (exception_io, e);
+        QUARK_KEY_DECOMPILE(key, &p0, &p1, &p2);
+        atest(fstr_equal(p0, "a\x00\x01"));
+        atest(fstr_equal(p1, ""));
+        atest(fstr_equal(p2, "b\x00\x01"));
+        try {
+            QUARK_KEY_DECOMPILE(fsc(key), &p0, &p1, &p2, &p3);
+            atest(false);
+        } catch (exception_io, e);
+    }
+}}
+
 static void test1() { sub_heap {
     rio_debug("running test1\n");
     qk_ctx_t* qk;
@@ -844,6 +890,7 @@ void rcd_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
         // Standard test.
         rio_debug("standard test\n");
         test0();
+        test01();
         test1();
         test2();
         rio_debug("tests done\n");

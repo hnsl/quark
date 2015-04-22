@@ -1012,3 +1012,49 @@ fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts) { sub_heap {
     }
     return escape(fstr_concat(new_parts, n_parts, "\x00\x00"));
 }}
+
+static void qk_decompile_next_part(size_t* i_part, size_t n_parts, fstr_t** out_parts, uint8_t* w_ptr, uint8_t* part_ptr) {
+    if (*i_part >= n_parts) {
+        throw("key had more parts than specified", exception_io);
+    }
+    out_parts[*i_part]->str = part_ptr;
+    out_parts[*i_part]->len = w_ptr - part_ptr;
+    *i_part = *i_part + 1;
+}
+
+void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t** out_parts) {
+    if (n_parts == 0) {
+        throw("invalid n_parts, cannot be zero", exception_arg);
+    }
+    size_t i_part = 0;
+    uint8_t* w_ptr = raw_key.str;
+    uint8_t* part_ptr = w_ptr;
+    bool in_escape = false;
+    for (size_t i = 0; i < raw_key.len; i++) {
+        uint8_t chr = raw_key.str[i];
+        if (in_escape) {
+            if (chr == 0) {
+                qk_decompile_next_part(&i_part, n_parts, out_parts, w_ptr, part_ptr);
+                part_ptr = w_ptr;
+            } else if (chr == 1) {
+                *(w_ptr++) = '\0';
+            } else {
+                throw("unknown escape sequence", exception_io);
+            }
+            in_escape = false;
+        } else {
+            if (chr == 0) {
+                in_escape = true;
+            } else {
+                *(w_ptr++) = chr;
+            }
+        }
+    }
+    if (in_escape) {
+        throw("key ended during escape sequence", exception_io);
+    }
+    qk_decompile_next_part(&i_part, n_parts, out_parts, w_ptr, part_ptr);
+    if (i_part != n_parts) {
+        throw("key had less parts than specified", exception_io);
+    }
+}

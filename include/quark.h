@@ -11,6 +11,16 @@
 /// the performance.
 #define QUARK_MAX_VALUE_LEN UINT16_MAX
 
+#define QUARK_KEY_COMPILE(...) ({ \
+    fstr_t keys[] = {__VA_ARGS__}; \
+    qk_compile_key(LENGTHOF(keys), keys); \
+})
+
+#define QUARK_KEY_DECOMPILE(raw_key, ...) ({ \
+    fstr_t* keys[] = {__VA_ARGS__}; \
+    qk_decompile_key(raw_key, LENGTHOF(keys), keys); \
+})
+
 /// Options for quark.
 typedef struct qk_opt {
     /// Set to true to always overwrite database target ipp.
@@ -98,5 +108,12 @@ qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt);
 /// single string but each individual part will be separated so each part is considered
 /// first in sequence when keys are lexicographically compared.
 fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts);
+
+/// Decompiles a key in-place which was compiled with qk_compile_key()
+/// and writes their respective parts to the given parts vector.
+/// When key have more or less parts than n_parts it throws an io exception.
+/// When key otherwise has invalid format the function throws an io exception as well.
+/// If an io exception is thrown the raw key could have been modified and has undefined content.
+void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t** out_parts);
 
 #endif
