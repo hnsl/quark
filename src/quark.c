@@ -1013,16 +1013,16 @@ fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts) { sub_heap {
     return escape(fstr_concat(new_parts, n_parts, "\x00\x00"));
 }}
 
-static void qk_decompile_next_part(size_t* i_part, size_t n_parts, fstr_t** out_parts, uint8_t* w_ptr, uint8_t* part_ptr) {
+static void qk_decompile_next_part(size_t* i_part, size_t n_parts, fstr_t* out_parts, uint8_t* w_ptr, uint8_t* part_ptr) {
     if (*i_part >= n_parts) {
         throw("key had more parts than specified", exception_io);
     }
-    out_parts[*i_part]->str = part_ptr;
-    out_parts[*i_part]->len = w_ptr - part_ptr;
+    out_parts[*i_part].str = part_ptr;
+    out_parts[*i_part].len = w_ptr - part_ptr;
     *i_part = *i_part + 1;
 }
 
-void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t** out_parts) {
+void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t* out_parts) {
     if (n_parts == 0) {
         throw("invalid n_parts, cannot be zero", exception_arg);
     }
