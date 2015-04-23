@@ -115,6 +115,7 @@ static void test01() { sub_heap {
     rio_debug("running test01\n");
     sub_heap {
         fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01"));
+        atest(qk_key_count_parts(key) == 1);
         fstr_t p0, p1;
         QUARK_KEY_DECOMPILE(key, &p0);
         atest(fstr_equal(p0, "a\x00\x01"));
@@ -124,7 +125,8 @@ static void test01() { sub_heap {
         } catch (exception_io, e);
     }
     sub_heap {
-        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01", "b\x00\x01"));
+        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01", "b\x00\x00\x01"));
+        atest(qk_key_count_parts(key) == 2);
         DBGFN(fss(fstr_ace_encode(key)));
         fstr_t p0, p1, p2;
         try {
@@ -133,21 +135,22 @@ static void test01() { sub_heap {
         } catch (exception_io, e);
         QUARK_KEY_DECOMPILE(key, &p0, &p1);
         atest(fstr_equal(p0, "a\x00\x01"));
-        atest(fstr_equal(p1, "b\x00\x01"));
+        atest(fstr_equal(p1, "b\x00\x00\x01"));
         try {
             QUARK_KEY_DECOMPILE(fsc(key), &p0, &p1, &p2);
             atest(false);
         } catch (exception_io, e);
     }
     sub_heap {
-        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x01", "", "b\x00\x01"));
+        fstr_t key = fss(QUARK_KEY_COMPILE("a\x00\x00\x01", "", "b\x00\x01"));
+        atest(qk_key_count_parts(key) == 3);
         fstr_t p0, p1, p2, p3;
         try {
             QUARK_KEY_DECOMPILE(fsc(key), &p0, &p1);
             atest(false);
         } catch (exception_io, e);
         QUARK_KEY_DECOMPILE(key, &p0, &p1, &p2);
-        atest(fstr_equal(p0, "a\x00\x01"));
+        atest(fstr_equal(p0, "a\x00\x00\x01"));
         atest(fstr_equal(p1, ""));
         atest(fstr_equal(p2, "b\x00\x01"));
         try {
