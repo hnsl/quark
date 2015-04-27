@@ -87,14 +87,14 @@ join_locked(void) squark_sync_done(join_server_params, sq_state_t* state) { serv
 }}
 
 fiber_main squark_sync_wait(fiber_main_attr, rcd_fid_t main_fid, rcd_fid_t sync_fid) { try {
-    DBGFN("waiting for sync [", sync_fid, "]");
+    //x-dbg/ DBGFN("waiting for sync [", sync_fid, "]");
     ifc_wait(sync_fid);
-    DBGFN("wait for sync [", sync_fid, "] complete");
+    //x-dbg/ DBGFN("wait for sync [", sync_fid, "] complete");
     squark_sync_done(main_fid);
 } catch (exception_desync, e); }
 
 static void squark_start_sync(sq_state_t* state) {
-    DBGFN("starting squark sync");
+    //x-dbg/ DBGFN("starting squark sync");
     fmitosis {
         rcd_fid_t sync_fid = acid_fsync_async(state->ah);
         assert(sync_fid != 0);
@@ -298,6 +298,7 @@ fiber_main squark_watcher(fiber_main_attr, rio_proc_t* proc) { try {
 
 squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, uint16_t target_ipp, list(fstr_t)* unix_env) { sub_heap {
     fstr_t db_path = concs(db_dir, "/", index_id);
+    //x-dbg/ DBGFN("starting squark [", db_path, "]");
     // Execute squark subprocess.
     rio_t *stdin_pipe_r, *stdin_pipe_w;
     rio_realloc_split(rio_open_pipe(), &stdin_pipe_r, &stdin_pipe_w);
