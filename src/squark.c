@@ -37,6 +37,8 @@ typedef enum {
     SQUARK_CMD_STORE_MUT = 201,*/
     // Updates existing key. When key does not exists an insert is made instead.
     SQUARK_CMD_UPSERT = 202,
+    // Request to provide status.
+    SQUARK_CMD_STATUS = 300,
 } squark_cmd_t;
 
 typedef enum {
@@ -44,6 +46,8 @@ typedef enum {
     SQUARK_RES_SYNC = 0,
     // Scan response.
     SQUARK_RES_SCAN = 100,
+    // Status response.
+    SQUARK_RES_STATUS = 300,
     /*
     // Response from SQUARK_CMD_STORE_MUT.
     // Key value pair already exists. The existing value is returned.
@@ -184,6 +188,15 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
                 }
             }*/
             break;
+        } case SQUARK_CMD_STATUS: {
+            // Request to read status with a specific id.
+            uint128_t request_id = rio_read_u128(state->in_h);
+            json_value_t stats = qk_get_stats(state->qk);
+            // Write result back.
+            rio_write_u16(state->out_h, SQUARK_RES_STATUS, true);
+            rio_write_u128(state->out_h, request_id, true);
+            rio_write_fstr(state->out_h, fss(json_stringify(stats)));
+            break;
         } default: {
             throw(concs("unknown command! [", cmd, "]"), exception_fatal);
             break;
@@ -256,6 +269,10 @@ void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
     }
 }
 
+join_locked(void) has_status_res(fstr_mem_t* status, join_server_params, fstr_mem_t** out_status) { server_heap_flip {
+    *out_status = import(status);
+}}
+
 join_locked(void) has_scan_band_res(fstr_mem_t* scan_band, uint64_t count, bool eof, join_server_params, fstr_mem_t** out_scan_band, uint64_t* out_count, bool* out_eof) { server_heap_flip {
     *out_scan_band = import(scan_band);
     *out_count = count;
@@ -279,6 +296,16 @@ fiber_main squark_reader(fiber_main_attr, rio_t* in_h) { try {
             try {
                 // Send result back to waiting fiber.
                 has_scan_band_res(scan_band, count, eof, scan_res_fid);
+            } catch (exception_inner_join_fail, e) {
+                // No longer interested in result.
+            }
+            break;
+        } case SQUARK_RES_STATUS: {
+            uint128_t status_res_fid = rio_read_u128(in_h);
+            fstr_mem_t* status_res = rio_read_fstr(in_h);
+            try {
+                // Send result back to waiting fiber.
+                has_status_res(status_res, status_res_fid);
             } catch (exception_inner_join_fail, e) {
                 // No longer interested in result.
             }
@@ -377,6 +404,33 @@ void squark_op_upsert(squark_t* sq, fstr_t key, fstr_t value) {
         rio_write_fstr(sq->out_h, value);
     }
 }
+
+join_locked(fstr_mem_t*) get_status_res(join_server_params, fstr_mem_t* status_res) {
+    return import(status_res);
+}
+
+fiber_main status_op_fiber(fiber_main_attr) { try {
+    fstr_mem_t* status_res;
+    accept_join(has_status_res, join_server_params, &status_res);
+    accept_join(get_status_res, join_server_params, status_res);
+} catch (exception_desync, e); }
+
+rcd_sub_fiber_t* squark_op_status(squark_t* sq) {
+    uninterruptible fmitosis {
+        rio_write_u16(sq->out_h, SQUARK_CMD_STATUS, true);
+        rio_write_u128(sq->out_h, new_fid, false);
+        return spawn_fiber(status_op_fiber(""));
+    }
+}
+
+fstr_mem_t* squark_get_status_res(rcd_fid_t status_fid) { sub_heap {
+    try {
+        return escape(get_status_res(status_fid));
+    } catch (exception_inner_join_fail, e) {
+        // Expected when squark is deleted.
+        return escape(fstr_cpy(""));
+    }
+}}
 
 join_locked(fstr_mem_t*) get_scan_band_res(uint64_t* out_count, bool* out_eof, join_server_params, fstr_mem_t* scan_band, uint64_t count, bool eof) {
     *out_count = count;

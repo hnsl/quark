@@ -40,14 +40,26 @@ void squark_op_insert(squark_t* sq, fstr_t key, fstr_t value);
 /// This call will uninterruptibly block if pipe is full.
 void squark_op_upsert(squark_t* sq, fstr_t key, fstr_t value);
 
+
+/// Starts an asynchronous status operation. Call squark_get_scan_res() with returned
+/// fiber id to block while waiting for the result.
+/// This call will uninterruptibly block if pipe is full.
+rcd_sub_fiber_t* squark_op_status(squark_t* sq);
+
+/// Returns the status result from a squark_op_status() operation.
+/// The returned string is a json structured returned from qk_get_stats().
+/// Killing the squark while calling this function is fine.
+/// In this situation the function will stop blocking and return an empty string.
+fstr_mem_t* squark_get_status_res(rcd_fid_t scan_fid);
+
 /// Starts an asynchronous scan operation. Call squark_get_scan_res() with returned
 /// fiber id to block while waiting for the result.
 /// This call will uninterruptibly block if pipe is full.
 rcd_sub_fiber_t* squark_op_scan(squark_t* sq, qk_scan_op_t op);
 
 /// Returns the scan result from a squark_op_scan() operation.
-/// Killing the squark while calling this function is fine. In this situation the function
-/// will stop blocking and return an empty string and out count 0 with out eof true.
+/// Killing the squark while calling this function is fine.
+/// In this situation the function will stop blocking and return an empty string.
 fstr_mem_t* squark_get_scan_res(rcd_fid_t scan_fid, uint64_t* out_count, bool* out_eof);
 
 /// Removes a squark index permanently.
