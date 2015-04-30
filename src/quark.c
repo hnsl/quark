@@ -991,16 +991,19 @@ qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
     // Increment session and complete first fsync to fail here if write does not work.
     hdr->session++;
     acid_fsync(ah);
-    // Calculate entry capacity.
+    // Calculate entry capacity. Clang crashes if we attempt to assign UINT128_MAX
+    // to a stack variable so we complicate this implementation slightly.
     uint16_t target_ipp = hdr->target_ipp;
-    uint128_t entry_cap = target_ipp;
-    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root) - 1; i_lvl++) {
+    uint128_t entry_cap = 0;
+    for (uint8_t i_lvl = 0;; i_lvl++) {
         if (!arth_safe_mul_uint128(entry_cap, target_ipp, &entry_cap)) {
-            entry_cap = UINT128_MAX;
+            ctx->entry_cap = UINT128_MAX;
+            break;
+        } else if (i_lvl >= LENGTHOF(hdr->root) - 1) {
+            ctx->entry_cap = entry_cap;
             break;
         }
     }
-    ctx->entry_cap = entry_cap;
     // Return with context.
     return ctx;
 }
