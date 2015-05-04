@@ -362,12 +362,14 @@ squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, uint16_t target_ipp, list
 }}
 
 void squark_kill(squark_t* sq) {
-    // Clean up fibers first to avoid io exception.
-    lwt_alloc_free(sq->watcher);
-    lwt_alloc_free(sq->reader);
-    // Now kill process.
-    rio_proc_signal(sq->proc, SIGKILL);
-    rio_proc_wait(sq->proc);
+    switch_heap (sq->heap) {
+        // Clean up fibers first to avoid io exception.
+        lwt_alloc_free(sq->watcher);
+        lwt_alloc_free(sq->reader);
+        // Now kill process.
+        rio_proc_signal(sq->proc, SIGKILL);
+        rio_proc_wait(sq->proc);
+    }
     lwt_alloc_free(sq->heap);
 }
 
@@ -478,8 +480,17 @@ void squark_rm_index(fstr_t db_dir, fstr_t index_id) { sub_heap {
     fstr_t db_path = concs(db_dir, "/", index_id);
     fstr_t data_path = concs(db_path, ".data");
     fstr_t journal_path = concs(db_path, ".journal");
-    rio_file_unlink(journal_path);
-    rio_file_unlink(data_path);
+    // Due to race neither file may actually exist.
+    // The squark subprocess creates the files asynchronously in respect to the squark spawn.
+    // We want to delete the data file first. If only the journal is deleted the database
+    // could be left in a silently corrupt state. If only the data is deleted we are
+    // only leaking disk space in the worst case.
+    if (rio_file_exists(data_path)) {
+        rio_file_unlink(data_path);
+    }
+    if (rio_file_exists(journal_path)) {
+        rio_file_unlink(journal_path);
+    }
 }}
 
 list(fstr_t)* squark_get_indexes(fstr_t db_dir) {
