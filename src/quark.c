@@ -280,7 +280,9 @@ static void qk_check_keylen(fstr_t key) {
 }
 
 typedef struct lookup_res {
-    /// Reference to level 0 partition if found.
+    /// Reference to:
+    /// When found: 0 level partition.
+    /// When not found: insert level partition.
     qk_part_t** ref;
     struct {
         /// Target partition to insert or split.
@@ -296,13 +298,26 @@ typedef enum lookup_mode {
     lookup_mode_last,
 } lookup_mode_t;
 
-/// Quark lookup with specified mode.
-/// When insert_target is true the returned index targets on non-matching levels will be the index after the
-/// down index where an insert would be made, otherwise the index for those levels will be the down index.
-/// The down index will be one index less than idx0 when following the root.
-static inline bool qk_lookup(qk_ctx_t* ctx, lookup_mode_t mode, fstr_t key, bool insert_target, lookup_res_t* out_r) {
-    if (mode == lookup_mode_key)
-        qk_check_keylen(key);
+typedef struct lookup_op {
+    /// Controls if lookup up key or first/last.
+    lookup_mode_t mode;
+    /// Key to lookup if mode == lookup_mode_key.
+    fstr_t key;
+    /// Normally the index returned for every target level is the down index followed during the lookup.
+    /// When this is set to true AND the key is not found, the down index will instead be the index after
+    /// the down index followed where an insert would be made.
+    /// The down index will always be (idx0 - 1) when following the root.
+    bool insert_idx;
+    /// Insert level, controls lookup ref.
+    uint8_t insert_lvl;
+    /// When true the lookup aborts and returns undefined lookup_res_t if the key is found.
+    bool found_abort;
+} lookup_op_t;
+
+/// Quark lookup with specified operation.
+static inline bool qk_lookup(qk_ctx_t* ctx, lookup_op_t op, lookup_res_t* out_r) {
+    if (op.mode == lookup_mode_key)
+        qk_check_keylen(op.key);
     qk_hdr_t* hdr = ctx->hdr;
     CASSERT(LENGTHOF(out_r->target) == LENGTHOF(hdr->root));
     bool following_root = true;
@@ -321,10 +336,10 @@ static inline bool qk_lookup(qk_ctx_t* ctx, lookup_mode_t mode, fstr_t key, bool
         qk_idx_t* idxE = idx0 + part->n_keys;
         qk_idx_t* idxT;
         bool found;
-        switch (mode) {{
+        switch (op.mode) {{
         } case lookup_mode_key: {
             // Normal key compare lookup with binary search.
-            found = qk_idx_lookup(idx0, idxE, key, &idxT);
+            found = qk_idx_lookup(idx0, idxE, op.key, &idxT);
             break;
         } case lookup_mode_first: {
             // Simulate lookup with infinitely small key.
@@ -337,8 +352,11 @@ static inline bool qk_lookup(qk_ctx_t* ctx, lookup_mode_t mode, fstr_t key, bool
             found = false;
             break;
         }}
+        assert(idxT >= idx0 && idxT <= idxE);
         // Fast travel to value when key is found.
         if (found) {
+            if (op.found_abort)
+                return true;
             out_r->target[i_lvl].idxT = idxT;
             while (i_lvl > 0) {
                 ref = qk_idx1_get_down_ptr(idxT);
@@ -351,33 +369,39 @@ static inline bool qk_lookup(qk_ctx_t* ctx, lookup_mode_t mode, fstr_t key, bool
             out_r->ref = ref;
             return true;
         }
+        // Register target/down index.
+        qk_idx_t* idxD = (idxT - 1);
+        out_r->target[i_lvl].idxT = (op.insert_idx? idxT: idxD);
+        if (i_lvl == op.insert_lvl) {
+            out_r->ref = ref;
+        }
         // Travel further.
         if (i_lvl == 0) {
-            out_r->target[i_lvl].idxT = idxT;
             // Key was not found.
+            out_r->target[i_lvl].idxT = idxT;
             return false;
-        } else if (i_lvl > 0) {
-            // Register down index.
-            qk_idx_t* idxD = (idxT - 1);
-            out_r->target[i_lvl].idxT = (insert_target? idxT: idxD);
-            // Determine how to reference the next level.
-            if (idxT == idx0) {
-                // This partition is too high, keep following root.
-                QK_SANTIY_CHECK(following_root);
-            } else {
-                // We follow the key that is immediately lower than the key
-                // we are looking up to get to the next partition.
-                ref = qk_idx1_get_down_ptr(idxD);
-                part = *ref;
-                following_root = false;
-            }
+        }
+        // Determine how to reference the next level.
+        if (idxT == idx0) {
+            // This partition is too high, keep following root.
+            QK_SANTIY_CHECK(following_root);
+        } else {
+            // We follow the key that is immediately lower than the key
+            // we are looking up to get to the next partition.
+            ref = qk_idx1_get_down_ptr(idxD);
+            part = *ref;
+            following_root = false;
         }
     }
 }
 
 bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
+    lookup_op_t op = {
+        .mode = lookup_mode_key,
+        .key = key,
+    };
     lookup_res_t r;
-    if (!qk_lookup(ctx, lookup_mode_key, key, false, &r)) {
+    if (!qk_lookup(ctx, op, &r)) {
         // Update require key to exist.
         return false;
     }
@@ -442,8 +466,12 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
 }
 
 bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
+    lookup_op_t op = {
+        .mode = lookup_mode_key,
+        .key = key,
+    };
     lookup_res_t r;
-    if (qk_lookup(ctx, lookup_mode_key, key, false, &r)) {
+    if (qk_lookup(ctx, op, &r)) {
         *out_value = qk_idx0_get_value(r.target[0].idxT);
         return true;
     } else {
@@ -595,11 +623,18 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
     bool start_equal;
     if (op.with_start) {
         // Initial lookup/seek to start key.
-        start_equal = qk_lookup(ctx, lookup_mode_key, op.key_start, false, &r);
+        lookup_op_t l_op = {
+            .mode = lookup_mode_key,
+            .key = op.key_start,
+        };
+        start_equal = qk_lookup(ctx, l_op, &r);
     } else {
         // Initial lookup/seek to index start/end.
-        lookup_mode_t mode = op.descending? lookup_mode_last: lookup_mode_first;
-        qk_lookup(ctx, mode, "", false, &r);
+        lookup_op_t l_op = {
+            .mode = (op.descending? lookup_mode_last: lookup_mode_first),
+            .key = op.key_start,
+        };
+        qk_lookup(ctx, l_op, &r);
         // Made an infinite positive/negative lookup that never matches exactly.
         start_equal = false;
     }
