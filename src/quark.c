@@ -781,54 +781,17 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     /// This is that reference for the insert level target partition.
     qk_part_t** insert_ref;
     // Start search.
-    bool following_root = true;
-    qk_part_t** next_ref;
-    for (size_t i_lvl = LENGTHOF(hdr->root) - 1;; i_lvl--) {
-        // Use level entry partition root reference when following root.
-        if (following_root) {
-            next_ref = &hdr->root[i_lvl];
-        }
-        // Resolve partition.
-        qk_part_t* part = *next_ref;
-        assert(part != 0);
-        // Search partition index.
-        qk_idx_t* idx0 = qk_part_get_idx0(part);
-        qk_idx_t* idxE = idx0 + part->n_keys;
-        qk_idx_t* idxT;
-        if (qk_idx_lookup(idx0, idxE, key, &idxT)) {
-            // Key already inserted!
-            return false;
-        }
-        assert(idxT >= idx0 && idxT <= idxE);
-        // Store resolved target if it's required later during write.
-        if (i_lvl <= insert_lvl) {
-            target[i_lvl].part = part;
-            target[i_lvl].idxT = idxT;
-        }
-        if (i_lvl == insert_lvl) {
-            insert_ref = next_ref;
-        }
-        // Travel further.
-        if (i_lvl == 0) {
-            // Key was not found.
-            break;
-        } else if (i_lvl > 0) {
-            // Determine how to reference the next level.
-            if (idxT == idx0) {
-                // All keys are higher than the key we are inserting or there are no keys.
-                // This is only possible if we made a wrong turn here from the skip list root because when we
-                // follow a down pointer (from lower key) the sub partition contains the (lower) key we followed.
-                // In this case we must continue to follow the skip list root down.
-                QK_SANTIY_CHECK(following_root);
-            } else {
-                // We follow the key that is immediately lower than the key where
-                // are inserting down to the next partition.
-                next_ref = qk_idx1_get_down_ptr(idxT - 1);
-                // Here we are no longer following the safety of the root but
-                // a misty winding trail of non-cached memory.
-                following_root = false;
-            }
-        }
+    lookup_op_t op = {
+        .mode = lookup_mode_key,
+        .key = key,
+        .insert_idx = true,
+        .insert_lvl = insert_lvl,
+        .found_abort = true,
+    };
+    lookup_res_t r;
+    if (qk_lookup(ctx, op, &r)) {
+        // Key already inserted!
+        return false;
     }
     // Write phase.
     // Calculate required insert space at entry level.
@@ -838,8 +801,8 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     qk_part_t** prev_down_ptr = 0;
     for (size_t i_lvl = insert_lvl;;) {
         // Go to next resolved target partition
-        qk_part_t* part = target[i_lvl].part;
-        qk_idx_t* idxT = target[i_lvl].idxT;
+        qk_part_t* part = r.target[i_lvl].part;
+        qk_idx_t* idxT = r.target[i_lvl].idxT;
         if (i_lvl == insert_lvl) {
             // At insert level we do a normal insert without any split.
             // Make sure the partition has enough space.
@@ -848,7 +811,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 // Reallocate the partition to expand it and translate the index target.
                 part = qk_part_insert_expand(ctx, i_lvl, part, req_space, &idxT);
                 // Update old partition reference (root pointer or a down pointer) to point to new partition.
-                *insert_ref = part;
+                *r.ref = part;
             }
             // Insert the entity now at the resolved target index.
             // Also resolve initial left and right down reference for split phase.
