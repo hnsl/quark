@@ -771,16 +771,6 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     //  2) Resolve insert level target partition reference.
     //  3) Resolve all target lte indexes of all target partitions.
     //  4) See if key is already inserted.
-    struct {
-        /// Target partition to insert or split.
-        qk_part_t* part;
-        /// Target index slot to insert key.
-        qk_idx_t* idxT;
-    } target[LENGTHOF(hdr->root)];
-    /// All partitions has exactly one incoming reference from root or from above.
-    /// This is that reference for the insert level target partition.
-    qk_part_t** insert_ref;
-    // Start search.
     lookup_op_t op = {
         .mode = lookup_mode_key,
         .key = key,
