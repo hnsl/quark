@@ -235,6 +235,43 @@ static void test1() { sub_heap {
         atest(!qk_band_read(&scan_mem, &key, &value));
     }
     fstr_t g_scan_mem2 = fss(fstr_alloc(100 * PAGE_SIZE));
+    // Test reverse delete.
+    rio_debug("test1: delete reverse\n");
+    for (size_t i = 0; i < total; i++) sub_heap {
+        size_t di = (total - i - 1);
+        atest(qk_delete(qk, keys[di]));
+        atest(!qk_delete(qk, keys[di]));
+        atest(!qk_delete(qk, concs(keys[di], "\x00")));
+        for (size_t j = 0; j < total; j++) {
+            fstr_t value;
+            bool found = qk_get(qk, keys[j], &value);
+            if (j < di) {
+                atest(found);
+                atest(fstr_equal(value, values[j]));
+            } else {
+                atest(!found);
+            }
+        }
+    }
+    // Test interleaved insert/delete.
+    rio_debug("test1: interleaved insert/delete\n");
+    for (size_t i = 0; i < total; i++) sub_heap {
+        fstr_t fake_key = concs(keys[i], "\x00");
+        atest(qk_insert(qk, fake_key, "is-geg"));
+        atest(qk_insert(qk, keys[i], values[i]));
+        for (size_t j = 0; j < total; j++) {
+            fstr_t value;
+            bool found = qk_get(qk, keys[j], &value);
+            if (j <= i) {
+                atest(found);
+                atest(fstr_equal(value, values[j]));
+            } else {
+                atest(!found);
+            }
+        }
+        atest(qk_delete(qk, fake_key));
+        atest(!qk_delete(qk, fake_key));
+    }
     rio_debug("test1: scan reverse\n");
     {
         // Reverse/descending scan.
