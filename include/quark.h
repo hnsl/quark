@@ -98,7 +98,12 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof);
 /// Will not attempt fsync or snapshot, caller is responsible for this.
 /// This function must be synchronized. Attempting to sync the database before the
 /// function is complete or calling insert in parallel will corrupt the database.
+/// The function returns true if the key did not exist and was inserted, otherwise false.
 bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value);
+
+/// Deletes a key/value pair from the quark database.
+/// The function returns true if the key existed and was removed, otherwise false.
+bool qk_delete(qk_ctx_t* ctx, fstr_t key);
 
 /// Returns statistics for the open database.
 json_value_t qk_get_stats(qk_ctx_t* ctx);

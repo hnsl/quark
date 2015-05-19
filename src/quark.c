@@ -937,6 +937,92 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     return true;
 }
 
+bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
+    qk_check_keylen(key);
+    qk_hdr_t* hdr = ctx->hdr;
+    // Lookup key.
+    lookup_op_t op = {
+        .mode = lookup_mode_key,
+        .key = key,
+    };
+    lookup_res_t r;
+    if (!qk_lookup(ctx, op, &r)) {
+        // Key does not exist.
+        return false;
+    }
+    // Start mutation.
+    qk_part_t** downL;
+    for (size_t i_lvl = r.insert_lvl;; i_lvl--) {
+        // Go to next resolved target partition
+        qk_part_t* part = r.target[i_lvl].part;
+        qk_idx_t* idxT = r.target[i_lvl].idxT;
+        if (i_lvl == r.insert_lvl) {
+            // Remove the key/value from the partition.
+            qk_part_delete_entry(hdr, i_lvl, part, idxT, true);
+            // Go down to next level.
+            if (i_lvl == 0)
+                break;
+            // Resolve the next left partition.
+            qk_idx_t* idx0 = qk_part_get_idx0(part);
+            if (idxT == idx0) {
+                // Root to the left, follow root down. (We would otherwise have seen this key on a higher insert level.)
+                assert(part == hdr->root[i_lvl]);
+                downL = &hdr->root[i_lvl - 1];
+            } else {
+                // Follow left down pointer down. This reference could have changed after the delete
+                // entry operation (by data move) which is why we take the reference here.
+                downL = qk_idx1_get_down_ptr(idxT - 1);
+            }
+        } else {
+            // Resolve left + right partition.
+            qk_part_t* partL = *downL;
+            qk_part_t* partR = part;
+            // We're about to free the first entry in the right partition.
+            // Update the statistics first.
+            assert(partR->n_keys > 0);
+            qk_idx_t* idxR0 = qk_part_get_idx0(partR);
+            size_t ent_dsize = qk_space_idx_data_level(i_lvl, idxR0);
+            hdr->stats.lvl[i_lvl].data_alloc_b -= ent_dsize;
+            hdr->stats.lvl[i_lvl].ent_count--;
+            // Copy everything in the dangling right partition into left partition.
+            if (partR->n_keys > 1) {
+                qk_idx_t* idxRE = idxR0 + partR->n_keys;
+                // Calculate if expand is required or if we can just copy over everything immediately.
+                uint64_t free_space = qk_part_free_space(partL);
+                uint64_t req_space = 0;
+                for (qk_idx_t* idxRT = idxR0 + 1; idxRT < idxRE; idxRT++) {
+                    req_space += sizeof(*idxRT) + qk_space_idx_data_level(i_lvl, idxRT);
+                }
+                if (free_space < req_space) {
+                    // Reallocate left partition with required space.
+                    partL = qk_part_realloc(ctx, i_lvl, partL, req_space);
+                    // Update old partition reference (root pointer or a down pointer) to point to new partition.
+                    *downL = partL;
+                }
+                // Copy over data immediately from right to left partition.
+                qk_part_insert_entry_range(i_lvl, partL, idxR0 + 1, idxRE);
+            }
+            // Deallocate the dangling right partition.
+            qk_part_alloc_free(ctx, i_lvl, partR);
+            // Go down to next level.
+            if (i_lvl == 0)
+                break;
+            // Resolve the next left partition.
+            if (partL->n_keys == 0) {
+                // Root to the left, follow root down.
+                assert(partL == hdr->root[i_lvl]);
+                downL = &hdr->root[i_lvl - 1];
+            } else {
+                // Follow left partition right most down pointer down to find next left most partition to merge with.
+                qk_idx_t* idxL0 = qk_part_get_idx0(partL);
+                downL = qk_idx1_get_down_ptr(idxL0 + partL->n_keys - 1);
+            }
+        }
+    }
+    // Delete complete.
+    return true;
+}
+
 json_value_t qk_get_stats(qk_ctx_t* ctx) {
     qk_hdr_t* hdr = ctx->hdr;
     json_value_t levels = jarr_new();
