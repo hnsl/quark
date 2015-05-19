@@ -54,7 +54,7 @@ typedef struct qk_lvl_stats {
     uint64_t part_count;
     /// Total bytes allocated for partitions.
     uint64_t total_alloc_b;
-    /// Bytes allocated for data use (keys, values).
+    /// Bytes allocated for data use (keys, values) but not indexes.
     uint64_t data_alloc_b;
     /// Bytes allocated for index use is sizeof(qk_idx_t) * ent_count.
 } qk_lvl_stats_t;

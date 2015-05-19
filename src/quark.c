@@ -172,6 +172,40 @@ static void qk_part_insert_entry(
     }
 }
 
+static void qk_part_delete_entry(
+    qk_hdr_t* hdr, uint8_t level,
+    qk_part_t* part, qk_idx_t* idxT, bool rm_key
+) {
+    assert(part->n_keys > 0);
+    size_t ent_dsize = qk_space_idx_data_level(level, idxT);
+    void* d_beg = qk_part_get_write0(part);
+    void* d_end = idxT->keyptr;
+    assert(d_beg <= d_end);
+    qk_idx_t* idx0 = qk_part_get_idx0(part);
+    qk_idx_t* idxE = idx0 + part->n_keys;
+    // Erase data by moving all left data to the right.
+    //x-dbg/ DPRINT("moving ", d_beg, " to ", d_end, " [", ent_dsize, "] b forward");
+    if (d_beg < d_end) {
+        memmove(d_beg + ent_dsize, d_beg, d_end - d_beg);
+        // Move all lower pointers forward.
+        for (qk_idx_t* idxC = idx0; idxC < idxE; idxC++) {
+            if ((void*) idxC->keyptr < d_end) {
+                idxC->keyptr += ent_dsize;
+            }
+        }
+    }
+    part->data_size -= ent_dsize;
+    hdr->stats.lvl[level].data_alloc_b -= ent_dsize;
+    if (rm_key) {
+        // Erase key by moving all right keys to the left.
+        if (idxT < idxE - 1) {
+            memmove(idxT, idxT + 1, sizeof(*idxT) * (idxE - idxT - 1));
+        }
+        part->n_keys--;
+        hdr->stats.lvl[level].ent_count--;
+    }
+}
+
 /// Returns the number of bytes of free space in a partition.
 static inline uint64_t qk_part_free_space(qk_part_t* part) {
     return part->total_size
@@ -282,8 +316,12 @@ static void qk_check_keylen(fstr_t key) {
 typedef struct lookup_res {
     /// Reference to:
     /// When found: 0 level partition.
-    /// When not found: insert level partition.
-    qk_part_t** ref;
+    /// When not found: undefined.
+    qk_part_t** ref0;
+    /// Reference to insert level partition.
+    qk_part_t** refI;
+    /// When found: the level the element is currently inserted at.
+    uint8_t insert_lvl;
     struct {
         /// Target partition to insert or split.
         qk_part_t* part;
@@ -357,6 +395,8 @@ static inline bool qk_lookup(qk_ctx_t* ctx, lookup_op_t op, lookup_res_t* out_r)
         if (found) {
             if (op.found_abort)
                 return true;
+            out_r->refI = ref;
+            out_r->insert_lvl = i_lvl;
             out_r->target[i_lvl].idxT = idxT;
             while (i_lvl > 0) {
                 ref = qk_idx1_get_down_ptr(idxT);
@@ -366,19 +406,20 @@ static inline bool qk_lookup(qk_ctx_t* ctx, lookup_op_t op, lookup_res_t* out_r)
                 out_r->target[i_lvl].part = part;
                 out_r->target[i_lvl].idxT = idxT;
             }
-            out_r->ref = ref;
+            out_r->ref0 = ref;
             return true;
         }
         // Register target/down index.
         qk_idx_t* idxD = (idxT - 1);
         out_r->target[i_lvl].idxT = (op.insert_idx? idxT: idxD);
         if (i_lvl == op.insert_lvl) {
-            out_r->ref = ref;
+            out_r->refI = ref;
         }
         // Travel further.
         if (i_lvl == 0) {
             // Key was not found.
             out_r->target[i_lvl].idxT = idxT;
+            out_r->ref0 = ref;
             return false;
         }
         // Determine how to reference the next level.
@@ -415,52 +456,35 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
         }
     } else { // (new_value.len != cur_value.len)
         // Delete the entry data by moving everything on the left into it.
-        {
-            size_t ent_dsize = qk_space_idx_data_level(0, idxT);
-            void* d_beg = qk_part_get_write0(part);
-            void* d_end = idxT->keyptr;
-            assert(d_beg <= d_end);
-            //x-dbg/ DPRINT("moving ", d_beg, " to ", d_end, " [", ent_dsize, "] b forward");
-            if (d_beg < d_end) {
-                memmove(d_beg + ent_dsize, d_beg, d_end - d_beg);
-                // Move all lower pointers forward.
-                qk_idx_t* idx0 = qk_part_get_idx0(part);
-                qk_idx_t* idxE = idx0 + part->n_keys;
-                for (qk_idx_t* idxC = idx0; idxC < idxE; idxC++) {
-                    if ((void*) idxC->keyptr < d_end) {
-                        idxC->keyptr += ent_dsize;
-                    }
-                }
-            }
-            part->data_size -= ent_dsize;
-        }
+        qk_hdr_t* hdr = ctx->hdr;
+        qk_part_delete_entry(hdr, 0, part, idxT, false);
         // Insert the new value now.
-        {
-            if (new_value.len > cur_value.len) {
-                // Expand may be required.
-                //x-dbg/ DPRINT("may require expand: ", new_value.len, " > ", cur_value.len);
-                uint64_t free_space = qk_part_free_space(part);
-                uint64_t req_space = qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t);
-                if (free_space < req_space) {
-                    //x-dbg/ DPRINT("expand required: ", req_space, " > ", free_space);
-                    // Reallocate the partition to expand it and translate the index target.
-                    qk_part_t* new_part = qk_part_insert_expand(ctx, 0, part, req_space, &idxT);
-                    // Update old partition reference (root pointer or a down pointer) to point to new partition.
-                    assert(*r.ref == part);
-                    *r.ref = new_part;
-                    part = new_part;
-                }
+        if (new_value.len > cur_value.len) {
+            // Expand may be required.
+            //x-dbg/ DPRINT("may require expand: ", new_value.len, " > ", cur_value.len);
+            uint64_t free_space = qk_part_free_space(part);
+            uint64_t req_space = qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t);
+            if (free_space < req_space) {
+                //x-dbg/ DPRINT("expand required: ", req_space, " > ", free_space);
+                // Reallocate the partition to expand it and translate the index target.
+                qk_part_t* new_part = qk_part_insert_expand(ctx, 0, part, req_space, &idxT);
+                // Update old partition reference (root pointer or a down pointer) to point to new partition.
+                assert(*r.ref0 == part);
+                *r.ref0 = new_part;
+                part = new_part;
             }
-            // Write the new data.
-            //x-dbg/ DPRINT("writing new data");
-            assert(qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t) <= qk_part_free_space(part));
-            void* write0 = qk_part_get_write0(part);
-            void* writeD = qk_write_entry_data(0, write0, key, new_value, 0);
-            // Write the new pointer.
-            idxT->keyptr = writeD;
-            // Adjust data size.
-            part->data_size += (write0 - writeD);
         }
+        // Write the new data.
+        //x-dbg/ DPRINT("writing new data");
+        assert(qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t) <= qk_part_free_space(part));
+        void* write0 = qk_part_get_write0(part);
+        void* writeD = qk_write_entry_data(0, write0, key, new_value, 0);
+        // Write the new pointer.
+        idxT->keyptr = writeD;
+        // Adjust data size.
+        size_t ent_dsize = (write0 - writeD);
+        part->data_size += ent_dsize;
+        hdr->stats.lvl[0].data_alloc_b += ent_dsize;
     }
     return true;
 }
@@ -801,7 +825,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 // Reallocate the partition to expand it and translate the index target.
                 part = qk_part_insert_expand(ctx, i_lvl, part, req_space, &idxT);
                 // Update old partition reference (root pointer or a down pointer) to point to new partition.
-                *r.ref = part;
+                *r.refI = part;
             }
             // Insert the entity now at the resolved target index.
             // Also resolve initial left and right down reference for split phase.
