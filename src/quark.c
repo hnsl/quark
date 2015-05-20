@@ -984,6 +984,8 @@ bool qk_delete(qk_map_ctx_t* mctx, fstr_t key) {
             size_t ent_dsize = qk_space_idx_data_level(i_lvl, idxR0);
             map->stats.lvl[i_lvl].data_alloc_b -= ent_dsize;
             map->stats.lvl[i_lvl].ent_count--;
+            // Track left partition number of keys before it's filled on the right.
+            size_t n_pre_keysL = partL->n_keys;
             // Copy everything in the dangling right partition into left partition.
             if (partR->n_keys > 1) {
                 qk_idx_t* idxRE = idxR0 + partR->n_keys;
@@ -1008,14 +1010,16 @@ bool qk_delete(qk_map_ctx_t* mctx, fstr_t key) {
             if (i_lvl == 0)
                 break;
             // Resolve the next left partition.
-            if (partL->n_keys == 0) {
+            // Must do it here after the potential reallocation to avoid relocating the down reference.
+            // We're not interested in following the keys we right filled though so we use the saved key count.
+            if (n_pre_keysL == 0) {
                 // Root to the left, follow root down.
                 assert(partL == map->root[i_lvl]);
                 downL = &map->root[i_lvl - 1];
             } else {
                 // Follow left partition right most down pointer down to find next left most partition to merge with.
                 qk_idx_t* idxL0 = qk_part_get_idx0(partL);
-                downL = qk_idx1_get_down_ptr(idxL0 + partL->n_keys - 1);
+                downL = qk_idx1_get_down_ptr(idxL0 + n_pre_keysL - 1);
             }
         }
     }
