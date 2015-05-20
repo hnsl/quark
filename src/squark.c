@@ -38,6 +38,8 @@ typedef enum {
     SQUARK_CMD_STORE_MUT = 201,*/
     // Updates existing key. When key does not exists an insert is made instead.
     SQUARK_CMD_UPSERT = 202,
+    // Performs an abstract operation on the squark map without returning a result.
+    SQUARK_CMD_PERFORM = 203,
     // Request to provide status.
     SQUARK_CMD_STATUS = 300,
 } squark_cmd_t;
@@ -199,6 +201,12 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
                     // Ignore non-existence.
                 }
             }*/
+            break;
+        } case SQUARK_CMD_PERFORM: {
+            // Run abstract operation.
+            sqk_prfm_cb_t perform_cb = (void*) rio_read_u64(state->in_h);
+            fstr_t arg = fss(rio_read_fstr(state->in_h));
+            perform_cb(state->ah, state->qk, state->maps, arg);
             break;
         } case SQUARK_CMD_STATUS: {
             // Request to read status with a specific id.
@@ -437,6 +445,14 @@ void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) {
         rio_write_fstr(sq->out_h, map_id);
         rio_write_fstr(sq->out_h, key);
         rio_write_fstr(sq->out_h, value);
+    }
+}
+
+void squark_op_perform(squark_t* sq, sqk_prfm_cb_t perform_cb, fstr_t arg) {
+    uninterruptible {
+        rio_write_u16(sq->out_h, SQUARK_CMD_PERFORM, true);
+        rio_write_u64(sq->out_h, (uint64_t) perform_cb, true);
+        rio_write_fstr(sq->out_h, arg);
     }
 }
 

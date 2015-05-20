@@ -16,6 +16,10 @@ typedef struct squark {
     rcd_sub_fiber_t* watcher;
 } squark_t;
 
+dict(qk_map_ctx_t);
+
+typedef void (*sqk_prfm_cb_t)(acid_h* ah, qk_ctx_t* qk, dict(qk_map_ctx_t*)* maps, fstr_t arg);
+
 /// Squark main. Should be called from program main.
 /// Will not return if main arguments indicate a squark spawn, i.e. first argument is "squark".
 /// May thrown exceptions during normal squark lifecycle.
@@ -44,6 +48,10 @@ void squark_op_insert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value);
 /// Upserts an element. Buffers data in the squark pipe without waiting for reply.
 /// This call will uninterruptibly block if pipe is full.
 void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value);
+
+/// Performs an abstract operation. Buffers data in the squark pipe without waiting for reply.
+/// This call will uninterruptibly block if pipe is full.
+void squark_op_perform(squark_t* sq, sqk_prfm_cb_t perform_cb, fstr_t arg);
 
 /// Starts an asynchronous status operation. Call squark_get_scan_res() with returned
 /// fiber id to block while waiting for the result.
