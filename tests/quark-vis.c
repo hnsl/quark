@@ -4,18 +4,18 @@
 
 dict(uint8_t);
 
-static json_value_t objid(qk_ctx_t* ctx, void* ptr, fstr_t type) {
-    size_t n = ((size_t) ptr - (size_t) acid_memory(ctx->ah).str) >> QK_VM_ATOM_2E;
+static json_value_t objid(qk_map_ctx_t* mctx, void* ptr, fstr_t type) {
+    size_t n = ((size_t) ptr - (size_t) acid_memory(mctx->ctx->ah).str) >> QK_VM_ATOM_2E;
     return jstr(sconc(type, "/", fss(fstr_from_uint(n, 16))));
 }
 
 static void qk_vis_part(
-    qk_ctx_t* ctx, uint8_t level, qk_part_t* part,
+    qk_map_ctx_t* mctx, uint8_t level, qk_part_t* part,
     json_value_t nodes, json_value_t edges,
     json_value_t from_id, dict(uint8_t)* visited
 ) {
-    qk_hdr_t* hdr = ctx->hdr;
-    json_value_t part_id = objid(ctx, part, "part");
+    qk_map_t* map = mctx->map;
+    json_value_t part_id = objid(mctx, part, "part");
     json_append(edges, jobj_new(
         {"from", from_id},
         {"to", part_id},
@@ -44,7 +44,7 @@ static void qk_vis_part(
                 {"label", jstr(key)},
             ));
             qk_part_t* cpart = *qk_idx1_get_down_ptr(idxC);
-            qk_vis_part(ctx, level - 1, cpart, nodes, edges, node_id, visited);
+            qk_vis_part(mctx, level - 1, cpart, nodes, edges, node_id, visited);
         } else {
             fstr_t value = qk_idx0_get_value(idxC); //fss(fstr_hexencode(fstr_slice(qk_idx0_get_value(idxC), 0, 4)));
             json_append(nodes, jobj_new(
@@ -64,8 +64,8 @@ static void qk_vis_part(
     }
 }
 
-fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
-    qk_hdr_t* hdr = ctx->hdr;
+fstr_mem_t* qk_vis_dump_graph(qk_map_ctx_t* mctx) { sub_heap {
+    qk_map_t* map = mctx->map;
     json_value_t nodes = jarr_new();
     json_value_t edges = jarr_new();
     dict(uint8_t)* visited = new_dict(uint8_t);
@@ -84,7 +84,7 @@ fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
         {"to", jstr("roots")},
     ));
     json_value_t prev_root_id;
-    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root); i_lvl++) {
+    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(map->root); i_lvl++) {
         json_value_t root_id = jstr(concs("root#", i_lvl));
         json_append(nodes, jobj_new(
             {"group", jstr("root")},
@@ -95,7 +95,7 @@ fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
             {"from", jstr("roots")},
             {"to", root_id},
         ));
-        qk_vis_part(ctx, i_lvl, hdr->root[i_lvl], nodes, edges, root_id, visited);
+        qk_vis_part(mctx, i_lvl, map->root[i_lvl], nodes, edges, root_id, visited);
         if (i_lvl > 0) {
             json_append(edges, jobj_new(
                 {"from", root_id},
@@ -114,7 +114,7 @@ fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
         {"to", jstr("free-lists")},
     ));
     json_value_t prev_list_id;
-    for (uint8_t class = 0; class < hdr->free_end_class; class++) {
+    for (uint8_t class = 0; class < map->free_end_class; class++) {
         json_value_t list_id = jstr(concs("flist#", class));
         json_append(nodes, jobj_new(
             {"group", jstr("free-list")},
@@ -125,10 +125,10 @@ fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
             {"from", jstr("free-lists")},
             {"to", list_id},
         ));
-        void** chunk = hdr->free_list[class];
+        void** chunk = map->free_list[class];
         json_value_t prev_id = list_id;
         while (chunk != 0) {
-            json_value_t cur_id = objid(ctx, chunk, "chunk");
+            json_value_t cur_id = objid(mctx, chunk, "chunk");
             json_append(edges, jobj_new(
                 {"from", prev_id},
                 {"to", cur_id},
@@ -155,7 +155,7 @@ fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx) { sub_heap {
     )));
 }}
 
-void qk_vis_render(qk_ctx_t* ctx, rio_t* out_h, list(fstr_t)* states) { sub_heap {
+void qk_vis_render(rio_t* out_h, list(fstr_t)* states) { sub_heap {
     extern const fstr_t vis_tpl;
     fstr_t html = fss(fstr_replace(vis_tpl, "$DATA", concs("[", fss(fstr_implode(states, ",")), "]")));
     rio_write(out_h, html);

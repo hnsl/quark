@@ -22,7 +22,12 @@ typedef struct squark {
 void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env);
 
 /// Spawns a new squark. Invokes the own process with first argument "squark" plus additional arguments.
-squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, uint16_t target_ipp, list(fstr_t)* unix_env);
+/// The schema maps map ids (to be created/initialized) to configuration objects.
+/// Example schema: {
+///     "foo": {"ipp": 40},
+///     "bar": {"ipp": 200},
+/// }
+squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, json_value_t schema, list(fstr_t)* unix_env);
 
 /// Kills a running squark and frees associated resources. Does not wait for sync.
 void squark_kill(squark_t* sq);
@@ -34,12 +39,11 @@ rcd_fid_t squark_op_barrier(squark_t* sq);
 
 /// Inserts an element. Buffers data in the squark pipe without waiting for reply.
 /// This call will uninterruptibly block if pipe is full.
-void squark_op_insert(squark_t* sq, fstr_t key, fstr_t value);
+void squark_op_insert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value);
 
 /// Upserts an element. Buffers data in the squark pipe without waiting for reply.
 /// This call will uninterruptibly block if pipe is full.
-void squark_op_upsert(squark_t* sq, fstr_t key, fstr_t value);
-
+void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value);
 
 /// Starts an asynchronous status operation. Call squark_get_scan_res() with returned
 /// fiber id to block while waiting for the result.
@@ -55,7 +59,7 @@ fstr_mem_t* squark_get_status_res(rcd_fid_t scan_fid);
 /// Starts an asynchronous scan operation. Call squark_get_scan_res() with returned
 /// fiber id to block while waiting for the result.
 /// This call will uninterruptibly block if pipe is full.
-rcd_sub_fiber_t* squark_op_scan(squark_t* sq, qk_scan_op_t op);
+rcd_sub_fiber_t* squark_op_scan(squark_t* sq, fstr_t map_id, qk_scan_op_t op);
 
 /// Returns the scan result from a squark_op_scan() operation.
 /// Killing the squark while calling this function is fine.

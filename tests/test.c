@@ -26,33 +26,33 @@ static void vis_init() {
     }
 }
 
-static void vis_render(qk_ctx_t* qk) {
+static void vis_render(qk_map_ctx_t* mctx) {
     switch_heap(vis_heap) {
-        void qk_vis_render(qk_ctx_t* ctx, rio_t* out_h, list(fstr_t)* states);
+        void qk_vis_render(rio_t* out_h, list(fstr_t)* states);
         rio_t* fh = rio_file_open("qk-vis-dump.html", false, true);
         rio_file_truncate(fh, 0);
-        qk_vis_render(qk, fh, vis_snaps);
+        qk_vis_render(fh, vis_snaps);
     }
     lwt_alloc_free(vis_heap);
     vis_init();
     DBGFN("rendered snapshots");
 }
 
-static void vis_snapshot(qk_ctx_t* ctx) { switch_heap(vis_heap) {
-    fstr_mem_t* qk_vis_dump_graph(qk_ctx_t* ctx);
-    list_push_end(vis_snaps, fstr_t, fss(qk_vis_dump_graph(ctx)));
+static void vis_snapshot(qk_map_ctx_t* mctx) { switch_heap(vis_heap) {
+    fstr_mem_t* qk_vis_dump_graph(qk_map_ctx_t* mctx);
+    list_push_end(vis_snaps, fstr_t, fss(qk_vis_dump_graph(mctx)));
     DBGFN("taking snapshot #", list_count(vis_snaps, fstr_t));
 }}
 
-static void print_stats(qk_ctx_t* qk) { sub_heap {
-    DBGFN(fss(json_stringify_pretty(qk_get_stats(qk))));
+static void print_stats(qk_map_ctx_t* mctx) { sub_heap {
+    DBGFN(fss(json_stringify_pretty(qk_get_stats(mctx))));
 }}
 
 static fstr_t test_get_db_path() {
     return concs("/var/tmp/.librcd-acid-test.", lwt_rdrand64());
 }
 
-static void test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah, qk_opt_t* set_opt) {
+static qk_map_ctx_t* test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah, qk_opt_t* set_opt) {
     fstr_t data_path = concs(db_path, ".data");
     fstr_t journal_path = concs(db_path, ".jrnl");
     acid_h* ah = acid_open(data_path, journal_path, ACID_ADDR_0, 0);
@@ -64,9 +64,10 @@ static void test_open_new_qk(fstr_t db_path, qk_ctx_t** out_qk, acid_h** out_ah,
     };
     if (set_opt != 0)
         opt = *set_opt;
-    qk_ctx_t* qk = qk_open(ah, &opt);
+    qk_ctx_t* qk = qk_open(ah);
     *out_qk = qk;
     *out_ah = ah;
+    return qk_open_map(qk, "test", &opt);
 }
 
 static void test_rm_db(fstr_t db_path) { sub_heap {
@@ -81,29 +82,29 @@ static void test0() { sub_heap {
     qk_ctx_t* qk;
     acid_h* ah;
     fstr_t db_path = test_get_db_path();
-    test_open_new_qk(db_path, &qk, &ah, 0);
+    qk_map_ctx_t* map = test_open_new_qk(db_path, &qk, &ah, 0);
     //x-dbg/ vis_snapshot(qk);
-    qk_insert(qk, "50", "fifty");
-    qk_insert(qk, "25", "twentyfive");
-    qk_insert(qk, "75", "seventyfive");
-    qk_insert(qk, "30", "thirty");
-    qk_insert(qk, "60", "sixty");
-    qk_insert(qk, "90", "ninety");
-    qk_insert(qk, "70", "seventy");
-    qk_insert(qk, "80", "eighty");
-    qk_insert(qk, "10", "ten");
-    qk_insert(qk, "20", "twenty");
-    //x-dbg/ vis_snapshot(qk);
-    qk_insert(qk, "51", "fiftyone");
-    qk_insert(qk, "26", "twentysix");
-    qk_insert(qk, "76", "seventysix");
-    qk_insert(qk, "31", "thirtyone");
-    qk_insert(qk, "61", "sixtyone");
-    qk_insert(qk, "91", "ninetyone");
-    qk_insert(qk, "71", "seventyone");
-    qk_insert(qk, "81", "eightyone");
-    qk_insert(qk, "11", "eleven");
-    qk_insert(qk, "21", "twentyone");
+    qk_insert(map, "50", "fifty");
+    qk_insert(map, "25", "twentyfive");
+    qk_insert(map, "75", "seventyfive");
+    qk_insert(map, "30", "thirty");
+    qk_insert(map, "60", "sixty");
+    qk_insert(map, "90", "ninety");
+    qk_insert(map, "70", "seventy");
+    qk_insert(map, "80", "eighty");
+    qk_insert(map, "10", "ten");
+    qk_insert(map, "20", "twenty");
+    //x-dbg/ vis_snapshot(map);
+    qk_insert(map, "51", "fiftyone");
+    qk_insert(map, "26", "twentysix");
+    qk_insert(map, "76", "seventysix");
+    qk_insert(map, "31", "thirtyone");
+    qk_insert(map, "61", "sixtyone");
+    qk_insert(map, "91", "ninetyone");
+    qk_insert(map, "71", "seventyone");
+    qk_insert(map, "81", "eightyone");
+    qk_insert(map, "11", "eleven");
+    qk_insert(map, "21", "twentyone");
     //x-dbg/ vis_snapshot(qk);
     //x-dbg/ vis_render(qk);
     acid_fsync(ah);
@@ -165,7 +166,7 @@ static void test1() { sub_heap {
     qk_ctx_t* qk;
     acid_h* ah;
     fstr_t db_path = test_get_db_path();
-    test_open_new_qk(db_path, &qk, &ah, 0);
+    qk_map_ctx_t* map = test_open_new_qk(db_path, &qk, &ah, 0);
     //x-dbg/ vis_snapshot(qk);
     //x-dbg/ print_stats(qk);
     size_t total = 0;
@@ -178,25 +179,25 @@ static void test1() { sub_heap {
             continue;
 
         fstr_t value;
-        atest(!qk_get(qk, capital, &value));
-        atest(qk_insert(qk, capital, country));
+        atest(!qk_get(map, capital, &value));
+        atest(qk_insert(map, capital, country));
         total++;
-        atest(qk_get(qk, capital, &value));
+        atest(qk_get(map, capital, &value));
 
         atest(fstr_equal(value, country));
         if (fstr_equal(capital, "Andorra la Vella")) {
             found_andorra = true;
         }
         if (found_andorra) {
-            atest(qk_get(qk, "Andorra la Vella", &value));
+            atest(qk_get(map, "Andorra la Vella", &value));
             atest(fstr_equal(value, "Andorra"));
         } else {
-            atest(!qk_get(qk, "Andorra la Vella", &value));
+            atest(!qk_get(map, "Andorra la Vella", &value));
         }
     }
-    //x-dbg/ vis_snapshot(qk);
-    //x-dbg/ vis_render(qk);
-    //x-dbg/ print_stats(qk);
+    //x-dbg/ vis_snapshot(map);
+    //x-dbg/ vis_render(map);
+    //x-dbg/ print_stats(map);
     rio_debug("test1: standard read\n");
     for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
         fstr_t country, capital;
@@ -204,9 +205,9 @@ static void test1() { sub_heap {
             continue;
         fstr_t value;
         //x-dbg/ rio_debug(concs("looking up [", capital, "]"));
-        atest(qk_get(qk, capital, &value));
+        atest(qk_get(map, capital, &value));
         atest(fstr_equal(value, country));
-        atest(!qk_get(qk, concs(capital, "\x00"), &value));
+        atest(!qk_get(map, concs(capital, "\x00"), &value));
     }}
     // Test scan.
     rio_debug("test1: scan default\n");
@@ -218,7 +219,7 @@ static void test1() { sub_heap {
         bool eof = false;
         fstr_t g_scan_mem = fss(fstr_alloc(100 * PAGE_SIZE));
         fstr_t scan_mem = g_scan_mem;
-        size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+        size_t scan_n = qk_scan(map, op, &scan_mem, &eof);
         atest(scan_n == total);
         atest(eof);
         fstr_t key, prev_key, value;
@@ -239,12 +240,12 @@ static void test1() { sub_heap {
     rio_debug("test1: delete reverse\n");
     for (size_t i = 0; i < total; i++) sub_heap {
         size_t di = (total - i - 1);
-        atest(qk_delete(qk, keys[di]));
-        atest(!qk_delete(qk, keys[di]));
-        atest(!qk_delete(qk, concs(keys[di], "\x00")));
+        atest(qk_delete(map, keys[di]));
+        atest(!qk_delete(map, keys[di]));
+        atest(!qk_delete(map, concs(keys[di], "\x00")));
         for (size_t j = 0; j < total; j++) {
             fstr_t value;
-            bool found = qk_get(qk, keys[j], &value);
+            bool found = qk_get(map, keys[j], &value);
             if (j < di) {
                 atest(found);
                 atest(fstr_equal(value, values[j]));
@@ -257,11 +258,11 @@ static void test1() { sub_heap {
     rio_debug("test1: interleaved insert/delete\n");
     for (size_t i = 0; i < total; i++) sub_heap {
         fstr_t fake_key = concs(keys[i], "\x00");
-        atest(qk_insert(qk, fake_key, "is-geg"));
-        atest(qk_insert(qk, keys[i], values[i]));
+        atest(qk_insert(map, fake_key, "is-geg"));
+        atest(qk_insert(map, keys[i], values[i]));
         for (size_t j = 0; j < total; j++) {
             fstr_t value;
-            bool found = qk_get(qk, keys[j], &value);
+            bool found = qk_get(map, keys[j], &value);
             if (j <= i) {
                 atest(found);
                 atest(fstr_equal(value, values[j]));
@@ -269,8 +270,8 @@ static void test1() { sub_heap {
                 atest(!found);
             }
         }
-        atest(qk_delete(qk, fake_key));
-        atest(!qk_delete(qk, fake_key));
+        atest(qk_delete(map, fake_key));
+        atest(!qk_delete(map, fake_key));
     }
     rio_debug("test1: scan reverse\n");
     {
@@ -280,7 +281,7 @@ static void test1() { sub_heap {
         };
         bool eof = false;
         fstr_t scan_mem = g_scan_mem2;
-        size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+        size_t scan_n = qk_scan(map, op, &scan_mem, &eof);
         atest(scan_n == total);
         atest(eof);
         fstr_t key, value;
@@ -308,7 +309,7 @@ static void test1() { sub_heap {
             {
                 bool eof = true;
                 fstr_t scan_mem = g_scan_mem2;
-                size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+                size_t scan_n = qk_scan(map, op, &scan_mem, &eof);
                 post_scan_mem = scan_mem;
                 atest(scan_n == limit);
                 atest(eof);
@@ -327,7 +328,7 @@ static void test1() { sub_heap {
                 bool eof = true;
                 op.limit = 0;
                 fstr_t scan_mem = fss(fstr_alloc(post_scan_mem.len));
-                size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+                size_t scan_n = qk_scan(map, op, &scan_mem, &eof);
                 atest(scan_n == limit);
                 atest(!eof);
                 fstr_t key, value;
@@ -394,7 +395,7 @@ static void test1() { sub_heap {
                                 " limit:[", (op.limit > 0? STR(op.limit): "∞"), "]"
                             );
                             */
-                            size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+                            size_t scan_n = qk_scan(map, op, &scan_mem, &eof);
                             atest(eof);
 
                             ssize_t start_i = start > 0? start - 1: 0;
@@ -462,7 +463,7 @@ static void test1() { sub_heap {
         bool eof = false;
         fstr_t g_scan_mem = fss(fstr_alloc(100 * PAGE_SIZE));
         fstr_t scan_mem = g_scan_mem;
-        size_t scan_n = qk_scan(qk, op, &scan_mem, &eof);
+        size_t scan_n = qk_scan(map, op, &scan_mem, &eof);
         atest(scan_n == total);
         atest(eof);
         fstr_t key, value;
@@ -484,30 +485,30 @@ static void test1() { sub_heap {
             if (!fstr_divide(row, ",", &country, &capital))
                 continue;
             // Test update non-existing key.
-            atest(!qk_update(qk, concs(capital, "\x00"), capital));
+            atest(!qk_update(map, concs(capital, "\x00"), capital));
             if ((i % 3) == 0) {
                 // Test value expand.
                 fstr_t new_value = concs(capital, " of ", country);
                 //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
-                atest(qk_update(qk, capital, new_value));
+                atest(qk_update(map, capital, new_value));
                 fstr_t value;
-                atest(qk_get(qk, capital, &value));
+                atest(qk_get(map, capital, &value));
                 atest(fstr_equal(value, new_value));
             } else if ((i % 3) == 1) {
                 // Test value shrink.
                 fstr_t new_value = fstr_slice(capital, 0, 3);
                 //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
-                atest(qk_update(qk, capital, new_value));
+                atest(qk_update(map, capital, new_value));
                 fstr_t value;
-                atest(qk_get(qk, capital, &value));
+                atest(qk_get(map, capital, &value));
                 atest(fstr_equal(value, new_value));
             } else {
                 // Test value replace.
                 fstr_t new_value = fss(fstr_reverse(country));
                 //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
-                atest(qk_update(qk, capital, new_value));
+                atest(qk_update(map, capital, new_value));
                 fstr_t value;
-                atest(qk_get(qk, capital, &value));
+                atest(qk_get(map, capital, &value));
                 atest(fstr_equal(value, new_value));
             }
             // For each iteration, verify all key/value mappings.
@@ -520,7 +521,7 @@ static void test1() { sub_heap {
                     if (j <= i) {
                         fstr_t value;
                         //x-dbg/ rio_debug(concs("looking up [", capital, "]"));
-                        atest(qk_get(qk, capital, &value));
+                        atest(qk_get(map, capital, &value));
                         fstr_t expect_value;
                         if ((j % 3) == 0) {
                             expect_value = concs(capital, " of ", country);
@@ -542,7 +543,7 @@ static void test1() { sub_heap {
                     if (j > i) {
                         fstr_t value;
                         //x-dbg/ rio_debug(concs("looking up [", capital, "]"));
-                        atest(qk_get(qk, capital, &value));
+                        atest(qk_get(map, capital, &value));
                         atest(fstr_equal(value, country));
                     }
                     j++;
@@ -571,7 +572,53 @@ static void cc_pair_vec_init(cc_pair_t* cc_vec, dict(fstr_t)* countries) {
 }
 
 static void test2() { sub_heap {
-    rio_debug("running test2\n");
+    rio_debug("running test2 (parallel map)\n");
+
+    qk_ctx_t* qk;
+    acid_h* ah;
+    fstr_t db_path = test_get_db_path();
+    test_open_new_qk(db_path, &qk, &ah, 0);
+    // Test writing/reading 100 maps with 100 entries each.
+    qk_opt_t opt = {.dtrm_seed = 1, .target_ipp = 4};
+    dict(qk_map_ctx_t*)* maps = new_dict(qk_map_ctx_t*);
+    for (size_t nmap_id = 0; nmap_id < 100; nmap_id++) {
+        fstr_t map_id = str(nmap_id);
+        qk_map_ctx_t* map = qk_open_map(qk, map_id, &opt);
+        dict_inserta(maps, qk_map_ctx_t*, map_id, map);
+        size_t offs = 100 * nmap_id;
+        for (size_t i = 0; i < 100; i++) sub_heap {
+            atest(qk_insert(map, str(i + offs), str(i + offs)));
+            atest(!qk_insert(map, str(i + offs), str(i + offs)));
+            if (i >= 50) {
+                atest(qk_delete(map, str((i - 50) * 2 + offs)));
+                atest(!qk_delete(map, str((i - 50) * 2 + offs)));
+            }
+        }
+    }
+    rio_debug("test2: verify\n");
+    for (size_t nmap_id = 0; nmap_id < 100; nmap_id++) {
+        qk_map_ctx_t* map = *dict_read(maps, qk_map_ctx_t*, str(nmap_id));
+        size_t offs = 100 * nmap_id;
+        for (size_t i = 0; i < 100; i++) sub_heap {
+            fstr_t value;
+            bool found = qk_get(map, str(i + offs), &value);
+            if ((i % 2) == 0) {
+                atest(!found);
+            } else {
+                atest(found);
+                atest(fstr_equal(value, str(i + offs)));
+            }
+        }
+    }
+
+    acid_fsync(ah);
+    acid_close(ah);
+    test_rm_db(db_path);
+    rio_debug("test2: complete\n");
+}}
+
+static void test3() { sub_heap {
+    rio_debug("running test3\n");
 
     // Index capitals mapped to countries.
     dict(fstr_t)* countries = new_dict(fstr_t);
@@ -598,13 +645,13 @@ static void test2() { sub_heap {
             rio_debug(concs("insert order #", i, "/1000\n"));
         }
         // Open database and begin insert.
-        test_open_new_qk(db_path, &qk, &ah, 0);
+        qk_map_ctx_t* map = test_open_new_qk(db_path, &qk, &ah, 0);
         for (size_t src = 0; src < n_pairs; src++) {
             fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
             //x-dbg/ rio_debug(concs("inserting #", i, " [", capital, "] [", country, "]\n"));
-            atest(!qk_get(qk, capital, &r_country));
-            atest(qk_insert(qk, capital, country));
-            atest(qk_get(qk, capital, &r_country));
+            atest(!qk_get(map, capital, &r_country));
+            atest(qk_insert(map, capital, country));
+            atest(qk_get(map, capital, &r_country));
             atest(fstr_equal(r_country, country));
         }
         // Shuffle the cc_vec.
@@ -615,11 +662,11 @@ static void test2() { sub_heap {
         // Verify that all key pairs exists.
         for (size_t src = 0; src < n_pairs; src++) { sub_heap {
             fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
-            atest(qk_get(qk, capital, &r_country));
+            atest(qk_get(map, capital, &r_country));
             atest(fstr_equal(r_country, country));
             fstr_t corrupt_capital = concs(capital, "\xfe");
             corrupt_capital.str[test_hash64_2n(i, src) % corrupt_capital.len]++;
-            atest(!qk_get(qk, corrupt_capital, &r_country));
+            atest(!qk_get(map, corrupt_capital, &r_country));
         }}
         // Close database.
         acid_close(ah);
@@ -637,23 +684,23 @@ static void test2() { sub_heap {
         qk_opt_t opt = {
             .dtrm_seed = 100 + i,
         };
-        test_open_new_qk(db_path, &qk, &ah, &opt);
+        qk_map_ctx_t* map = test_open_new_qk(db_path, &qk, &ah, &opt);
         for (size_t src = 0; src < n_pairs; src++) {
             fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
             //x-dbg/ rio_debug(concs("inserting #", i, " [", capital, "] [", country, "]\n"));
-            atest(!qk_get(qk, capital, &r_country));
-            atest(qk_insert(qk, capital, country));
-            atest(qk_get(qk, capital, &r_country));
+            atest(!qk_get(map, capital, &r_country));
+            atest(qk_insert(map, capital, country));
+            atest(qk_get(map, capital, &r_country));
             atest(fstr_equal(r_country, country));
         }
         // Verify that all key pairs exists.
         for (size_t src = 0; src < n_pairs; src++) { sub_heap {
             fstr_t capital = cc_vec[src].capital, country = cc_vec[src].country, r_country;
-            atest(qk_get(qk, capital, &r_country));
+            atest(qk_get(map, capital, &r_country));
             atest(fstr_equal(r_country, country));
             fstr_t corrupt_capital = concs(capital, "\xfe");
             corrupt_capital.str[test_hash64_2n(i, src) % corrupt_capital.len]++;
-            atest(!qk_get(qk, corrupt_capital, &r_country));
+            atest(!qk_get(map, corrupt_capital, &r_country));
         }}
         // Close database.
         acid_close(ah);
@@ -726,14 +773,14 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
         .dtrm_seed = 0x5aaad5b38fd30f38,
         .target_ipp = 40,
     };
-    test_open_new_qk(db_path, &qk, &ah, &opt);
+    qk_map_ctx_t* map = test_open_new_qk(db_path, &qk, &ah, &opt);
     uint64_t ent_seq = 0;
     uint64_t total_snaps = 0;
     //x-dbg/ fstr_t maps_buffer = fss(fstr_alloc_buffer(0x10000000));
 
     for (;;) sub_heap {
 
-        json_value_t stats = qk_get_stats(qk);
+        json_value_t stats = qk_get_stats(map);
         uint64_t total_alloc = 0;
         uint64_t i_lvl = 0;
         JSON_ARR_FOREACH(JSON_REF(stats, "levels"), level) {
@@ -767,7 +814,7 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
                     .inc_start = false
                 };
                 bool eof;
-                qk_scan(qk, op, &band, &eof);
+                qk_scan(map, op, &band, &eof);
                 for (;;) {
                     fstr_t key, value;
                     if (!qk_band_read(&band, &key, &value)) {
@@ -807,7 +854,7 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
                 uint64_t ent_id = test_hash64_2n(i, ent_seq) % ent_seq;
                 fstr_t key = get_ent_key(ent_id);
                 fstr_t value = get_ent_value(ent_id), r_value;
-                if (!qk_get(qk, key, &r_value)) {
+                if (!qk_get(map, key, &r_value)) {
                     rio_debug(concs("could not find inserted key [", fss(fstr_hexencode(key)), "] (test #", i, ") (entry #", ent_id, ")!\n"));
                     lwt_exit(1);
                 }
@@ -819,7 +866,7 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
             {
                 uint64_t ent_id = ent_seq + (test_hash64_2n(i, ent_seq) % n_inserts);
                 fstr_t key = get_ent_key(ent_id), r_value;
-                atest(!qk_get(qk, key, &r_value));
+                atest(!qk_get(map, key, &r_value));
             }
         }
 
@@ -836,18 +883,18 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
 
             if ((i % 40) != 0) {
                 //x-dbg/ rio_debug(concs("inserting [", fss(fstr_hexencode(fstr_slice(key, 0, 8))), "] => [", fss(fstr_hexencode(fstr_slice(value, 0, 8))), "] (entry #", ent_id, ")!\n"));
-                if (!qk_insert(qk, key, value)) {
+                if (!qk_insert(map, key, value)) {
                     rio_debug(concs("key conflict for [", fss(fstr_hexencode(key)), "] (entry #", ent_id, ")!\n"));
                     lwt_exit(1);
                 }
             } else {
                 // Every 40th insert we first insert the wrong value and then update to the right value to stress test update.
                 fstr_t wrong_value = get_ent_value(ent_id + 1);
-                atest(qk_insert(qk, key, wrong_value));
+                atest(qk_insert(map, key, wrong_value));
                 // Since we don't sync in between the wrong value should never be visible when reopening the database.
-                atest(qk_update(qk, key, value));
+                atest(qk_update(map, key, value));
             }
-            atest(qk_get(qk, key, &r_value));
+            atest(qk_get(map, key, &r_value));
             atest(fstr_equal(value, r_value));
 
             if (acid_snapshot(ah)) {
@@ -933,6 +980,7 @@ void rcd_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
         test01();
         test1();
         test2();
+        test3();
         rio_debug("tests done\n");
     }
     lwt_exit(0);

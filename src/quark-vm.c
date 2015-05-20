@@ -34,45 +34,49 @@ uint8_t qk_value_to_2e(uint64_t value, bool round_up) {
     return qk_log2(round_up? (value - 1) << 1: value);
 }
 
+void* qk_vm_mmap_raw(qk_ctx_t* ctx, size_t size) {
+    fstr_t amem = acid_memory(ctx->ah);
+    acid_expand(ctx->ah, amem.len + size);
+    return amem.str + amem.len;
+}
+
 /// Free memory of the specified size class.
-static void qk_vm_push(qk_ctx_t* ctx, void* block, uint8_t atom_2e) {
-    qk_hdr_t* hdr = ctx->hdr;
-    assert(atom_2e < hdr->free_end_class);
-    *((void**) block) = hdr->free_list[atom_2e];
-    hdr->free_list[atom_2e] = block;
+static void qk_vm_push(qk_map_ctx_t* mctx, void* block, uint8_t atom_2e) {
+    qk_map_t* map = mctx->map;
+    assert(atom_2e < map->free_end_class);
+    *((void**) block) = map->free_list[atom_2e];
+    map->free_list[atom_2e] = block;
 }
 
 /// Allocate memory of specified size class.
-static void* qk_vm_pop(qk_ctx_t* ctx, uint8_t atom_2e) {
-    qk_hdr_t* hdr = ctx->hdr;
+static void* qk_vm_pop(qk_map_ctx_t* mctx, uint8_t atom_2e) {
+    qk_map_t* map = mctx->map;
     for (uint8_t i_2e = atom_2e;; i_2e++) {
         void* block;
         size_t block_len;
-        if (i_2e >= hdr->free_end_class) {
+        if (i_2e >= map->free_end_class) {
             // Out of memory, need to reserve more.
-            if (i_2e >= LENGTHOF(hdr->free_list))
+            if (i_2e >= LENGTHOF(map->free_list))
                 throw(concs("allocation unsupported, size too great [", i_2e, "]"), exception_fatal);
             // Cannot reserve less than one page of memory from acid.
             i_2e = MAX(i_2e, (QK_VM_PAGE_2E - QK_VM_ATOM_2E));
             // Allocate the block by expanding acid memory.
-            hdr->free_end_class = i_2e + 1;
+            map->free_end_class = i_2e + 1;
             block_len = qk_atoms_2e_to_bytes(i_2e);
-            fstr_t amem = acid_memory(ctx->ah);
-            acid_expand(ctx->ah, amem.len + block_len);
-            block = amem.str + amem.len;
+            block = qk_vm_mmap_raw(mctx->ctx, block_len);
             goto has_rblock;
         }
-        block = hdr->free_list[i_2e];
+        block = map->free_list[i_2e];
         if (block != 0) {
             // Pop block from free list.
-            hdr->free_list[i_2e] = *((void**) block);
+            map->free_list[i_2e] = *((void**) block);
             // Split block and reinsert until we reach the required size.
             block_len = qk_atoms_2e_to_bytes(i_2e);
             has_rblock:;
             while (i_2e > atom_2e) {
                 i_2e--;
-                *((void**) block) = hdr->free_list[i_2e];
-                hdr->free_list[i_2e] = block;
+                *((void**) block) = map->free_list[i_2e];
+                map->free_list[i_2e] = block;
                 block_len /= 2;
                 block += block_len;
             }
@@ -81,18 +85,18 @@ static void* qk_vm_pop(qk_ctx_t* ctx, uint8_t atom_2e) {
     }
 }
 
-void* qk_vm_alloc(qk_ctx_t* ctx, uint64_t bytes, uint64_t* out_bytes, uint8_t* out_atom_2e) {
+void* qk_vm_alloc(qk_map_ctx_t* mctx, uint64_t bytes, uint64_t* out_bytes, uint8_t* out_atom_2e) {
     uint8_t atom_2e = qk_bytes_to_atoms_2e(bytes, true);
     if (out_bytes != 0)
         *out_bytes = qk_atoms_2e_to_bytes(atom_2e);
     if (out_atom_2e != 0)
         *out_atom_2e = atom_2e;
-    return qk_vm_pop(ctx, atom_2e);
+    return qk_vm_pop(mctx, atom_2e);
 }
 
-void qk_vm_free(qk_ctx_t* ctx, void* ptr, uint64_t bytes, uint8_t* out_atom_2e) {
+void qk_vm_free(qk_map_ctx_t* mctx, void* ptr, uint64_t bytes, uint8_t* out_atom_2e) {
     uint8_t atom_2e = qk_bytes_to_atoms_2e(bytes, true);
     if (out_atom_2e != 0)
         *out_atom_2e = atom_2e;
-    qk_vm_push(ctx, ptr, atom_2e);
+    qk_vm_push(mctx, ptr, atom_2e);
 }

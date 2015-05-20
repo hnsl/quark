@@ -26,10 +26,8 @@
 
 /// Options for quark.
 typedef struct qk_opt {
-    /// Set to true to always overwrite database target ipp.
-    /// Set to false to only set target ipp on db init.
-    bool overwrite_target_ipp;
-    /// Tuning parameter: Target items per partition. Set to 0 to use the default.
+    /// Tuning parameter: Target items per partition. Set to 0 to use the default
+    /// or to use the existing value.
     /// The database will auto tune internal probabilities based on inserted data
     /// to attempt to approach this value.
     uint16_t target_ipp;
@@ -42,16 +40,19 @@ typedef struct qk_opt {
 /// Quark context.
 typedef struct qk_ctx qk_ctx_t;
 
+/// Quark map. Opened from a quark context.
+typedef struct qk_map_ctx qk_map_ctx_t;
+
 /// Updates a single value in the quark database with the specified key.
 /// Returns false if the key does not exist.
 /// This function is optimized to mutate values, not remove them or to save space
 /// by shrinking them. Quark does currently not support removing key/value pairs
 /// or freeing already reserved space.
-bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value);
+bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value);
 
 /// Fetches a single value from the quark database from the specified key.
 /// Returns false if the key does not exist.
-bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value);
+bool qk_get(qk_map_ctx_t* mctx, fstr_t key, fstr_t* out_value);
 
 typedef struct qk_scan_op {
     /// Start scan operation at this key.
@@ -92,25 +93,28 @@ bool qk_band_read(fstr_t* io_mem, fstr_t* out_key, fstr_t* out_value);
 /// completed, the end is reached and eof is set.
 /// The configuration for the scan is passed via "op".
 /// The function returns the number of key/value pairs copied to the band.
-uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof);
+uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof);
 
 /// Inserts a key/value pair into quark database.
 /// Will not attempt fsync or snapshot, caller is responsible for this.
 /// This function must be synchronized. Attempting to sync the database before the
 /// function is complete or calling insert in parallel will corrupt the database.
 /// The function returns true if the key did not exist and was inserted, otherwise false.
-bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value);
+bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value);
 
 /// Deletes a key/value pair from the quark database.
 /// The function returns true if the key existed and was removed, otherwise false.
-bool qk_delete(qk_ctx_t* ctx, fstr_t key);
+bool qk_delete(qk_map_ctx_t* mctx, fstr_t key);
 
 /// Returns statistics for the open database.
-json_value_t qk_get_stats(qk_ctx_t* ctx);
+json_value_t qk_get_stats(qk_map_ctx_t* mctx);
 
 /// Opens a quark database.
 /// To close the quark database just fsync the acid handle as required and free the context.
-qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt);
+qk_ctx_t* qk_open(acid_h* ah);
+
+/// Opens a quark map.
+qk_map_ctx_t* qk_open_map(qk_ctx_t* ctx, fstr_t name, qk_opt_t* opt);
 
 /// Compiles a multi-dimensional quark key. The returned key has the property that it's a
 /// single string but each individual part will be separated so each part is considered

@@ -18,6 +18,7 @@ typedef struct {
     qk_ctx_t* qk;
     rio_t* in_h;
     rio_t* out_h;
+    dict(qk_map_ctx_t*)* maps;
     sync_queue_t sq_cur;
     sync_queue_t sq_pnd;
     bool is_dirty;
@@ -107,6 +108,13 @@ static void squark_start_sync(sq_state_t* state) {
     }
 }
 
+static qk_map_ctx_t* resolve_map_ctx(sq_state_t* state, fstr_t map_id) {
+    qk_map_ctx_t** map_ptr = dict_read(state->maps, qk_map_ctx_t*, map_id);
+    if (map_ptr == 0)
+        throw(concs("no such map [", map_id, "]"), exception_fatal);
+    return *map_ptr;
+}
+
 join_locked(void) squark_read(join_server_params, sq_state_t* state) {
     for (;;) { sub_heap {
         squark_cmd_t cmd = rio_read_u16(state->in_h);
@@ -131,6 +139,7 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
         } case SQUARK_CMD_SCAN: {
             // Request to scan data with a specific id.
             //x-dbg/ DBGFN("got scan op, reading op");
+            fstr_t map_id = fss(rio_read_fstr(state->in_h));
             uint128_t request_id = rio_read_u128(state->in_h);
             qk_scan_op_t op;
             rio_read_fill(state->in_h, FSTR_PACK(op));
@@ -139,10 +148,11 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
             if (op.with_end)
                 op.key_end = fss(rio_read_fstr(state->in_h));
             //x-dbg/ DBGFN("scan op read, executing");
+            qk_map_ctx_t* map = resolve_map_ctx(state, map_id);
             // Execute scan.
             bool eof;
             fstr_t band_mem = fss(fstr_alloc_buffer(1000 * PAGE_SIZE));
-            uint64_t count = qk_scan(state->qk, op, &band_mem, &eof);
+            uint64_t count = qk_scan(map, op, &band_mem, &eof);
             // Write result back.
             //x-dbg/ DBGFN("writing result back (", count, ")");
             rio_write_u16(state->out_h, SQUARK_RES_SCAN, true);
@@ -154,18 +164,20 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
         } case SQUARK_CMD_UPSERT: {
         } case SQUARK_CMD_INSERT_IMM: {
             // Store/update an entry.
+            fstr_t map_id = fss(rio_read_fstr(state->in_h));
             fstr_t key = fss(rio_read_fstr(state->in_h));
             fstr_t value = fss(rio_read_fstr(state->in_h));
+            qk_map_ctx_t* map = resolve_map_ctx(state, map_id);
             if (cmd == SQUARK_CMD_UPSERT) {
                 // Attempt to update.
                 //x-dbg/ DBGFN("update: [", key, "] => [", value, "]");
-                if (qk_update(state->qk, key, value)) {
+                if (qk_update(map, key, value)) {
                     state->is_dirty = true;
                     break;
                 }
             }
             //x-dbg/ DBGFN("insert: [", key, "] => [", value, "]");
-            bool insert_ok = qk_insert(state->qk, key, value);
+            bool insert_ok = qk_insert(map, key, value);
             if (!insert_ok) {
                 if (cmd == SQUARK_CMD_UPSERT)
                     throw("insert conflict after update failure", exception_fatal);
@@ -191,7 +203,10 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
         } case SQUARK_CMD_STATUS: {
             // Request to read status with a specific id.
             uint128_t request_id = rio_read_u128(state->in_h);
-            json_value_t stats = qk_get_stats(state->qk);
+            json_value_t stats = jobj_new();
+            dict_foreach(state->maps, qk_map_ctx_t*, map_id, map) {
+                JSON_SET(stats, map_id, qk_get_stats(map));
+            }
             // Write result back.
             rio_write_u16(state->out_h, SQUARK_RES_STATUS, true);
             rio_write_u128(state->out_h, request_id, true);
@@ -234,10 +249,9 @@ void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
         // Configure squark and open it.
         uint16_t target_ipp = fs2ui(target_ipp_arg);
         qk_opt_t opt = {
-            .overwrite_target_ipp = true,
             .target_ipp = target_ipp,
         };
-        qk_ctx_t* qk = qk_open(ah, &opt);
+        qk_ctx_t* qk = qk_open(ah);
         // Initialize state.
         sq_state_t* state = new(sq_state_t);
         state->main_fid = rcd_self;
@@ -247,6 +261,21 @@ void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
         // TODO: Perhaps use ib pipe for fast buffered out_h.
         state->in_h = rio_stdin();
         state->out_h = rio_stdout();
+        // Read schema and open all maps.
+        state->maps = new_dict(qk_map_ctx_t*);
+        sub_heap_txn(heap) {
+            fstr_t jschema = fss(rio_read_fstr(state->in_h));
+            json_value_t schema = json_parse(jschema)->value;
+            JSON_OBJ_FOREACH(schema, map_key, map_cfg) {
+                qk_opt_t opt = {
+                    .target_ipp = jnumv(JSON_REF(map_cfg, "ipp")),
+                };
+                switch_heap(heap) {
+                    qk_map_ctx_t* map = qk_open_map(qk, map_key, &opt);
+                    dict_inserta(state->maps, qk_map_ctx_t*, map_key, map);
+                }
+            }
+        }
         // Spawn fiber that waits on in_h and reads.
         fmitosis {
             rio_epoll_t* stdin_epoll = rio_epoll_create(state->in_h, rio_epoll_event_inlvl);
@@ -323,7 +352,7 @@ fiber_main squark_watcher(fiber_main_attr, rio_proc_t* proc) { try {
     throw(concs("squark crashed with [", rcode, "]"), exception_fatal);
 } catch (exception_desync, e); }
 
-squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, uint16_t target_ipp, list(fstr_t)* unix_env) { sub_heap {
+squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, json_value_t schema, list(fstr_t)* unix_env) { sub_heap {
     fstr_t db_path = concs(db_dir, "/", index_id);
     //x-dbg/ DBGFN("starting squark [", db_path, "]");
     // Execute squark subprocess.
@@ -333,12 +362,14 @@ squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, uint16_t target_ipp, list
     rio_realloc_split(rio_open_pipe(), &stdout_pipe_r, &stdout_pipe_w);
     rio_sub_exec_t se = { .exec = {
         .path = rio_self_path,
-        .args = new_list(fstr_t, "squark", db_path, ui2fs(target_ipp)),
+        .args = new_list(fstr_t, "squark", db_path),
         .env = unix_env,
         .io_in = stdin_pipe_r,
         .io_out = stdout_pipe_w,
     }};
     rio_proc_t* proc_h = escape(rio_proc_execute(se));
+    // Write schema.
+    rio_write_fstr(stdin_pipe_w, fss(json_stringify(schema)));
     // Return handle to squark.
     lwt_heap_t* heap = lwt_alloc_heap();
     squark_t* sq;
@@ -391,17 +422,19 @@ rcd_fid_t squark_op_barrier(squark_t* sq) {
     }
 }
 
-void squark_op_insert(squark_t* sq, fstr_t key, fstr_t value) {
+void squark_op_insert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) {
     uninterruptible {
         rio_write_u16(sq->out_h, SQUARK_CMD_INSERT_IMM, true);
+        rio_write_fstr(sq->out_h, map_id);
         rio_write_fstr(sq->out_h, key);
         rio_write_fstr(sq->out_h, value);
     }
 }
 
-void squark_op_upsert(squark_t* sq, fstr_t key, fstr_t value) {
+void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) {
     uninterruptible {
         rio_write_u16(sq->out_h, SQUARK_CMD_UPSERT, true);
+        rio_write_fstr(sq->out_h, map_id);
         rio_write_fstr(sq->out_h, key);
         rio_write_fstr(sq->out_h, value);
     }
@@ -448,12 +481,13 @@ fiber_main scan_op_fiber(fiber_main_attr) { try {
     accept_join(get_scan_band_res, join_server_params, scan_band, count, eof);
 } catch (exception_desync, e); }
 
-rcd_sub_fiber_t* squark_op_scan(squark_t* sq, qk_scan_op_t op) {
+rcd_sub_fiber_t* squark_op_scan(squark_t* sq, fstr_t map_id, qk_scan_op_t op) {
     uninterruptible fmitosis {
         // We could design this so the scan op fiber does the write asynchronously instead
         // but it's not necessary because deadlock is impossible anyway as the reader is never
         // really blocking on anything. Scan results are already passed asynchronously back.
         rio_write_u16(sq->out_h, SQUARK_CMD_SCAN, true);
+        rio_write_fstr(sq->out_h, map_id);
         rio_write_u128(sq->out_h, new_fid, true);
         rio_write(sq->out_h, FSTR_PACK(op));
         if (op.with_start)

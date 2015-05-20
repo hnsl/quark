@@ -11,33 +11,33 @@ noret void qk_throw_sanity_error(fstr_t file, int64_t line) {
 }
 
 /// Allocates a new empty partition.
-static inline qk_part_t* qk_part_alloc_new(qk_ctx_t* ctx, uint8_t level, uint64_t req_space) {
+static inline qk_part_t* qk_part_alloc_new(qk_map_ctx_t* mctx, uint8_t level, uint64_t req_space) {
     // Allocate and initialize partition.
     size_t part_size;
     uint8_t size_class;
     uint64_t min_size = sizeof(qk_part_t) + req_space;
-    qk_part_t* part = qk_vm_alloc(ctx, min_size, &part_size, &size_class);
+    qk_part_t* part = qk_vm_alloc(mctx, min_size, &part_size, &size_class);
     *part = (qk_part_t) {
         .total_size = part_size
     };
     // Update statistics.
-    ctx->hdr->stats.part_class_count[size_class]++;
-    ctx->hdr->stats.lvl[level].total_alloc_b += part_size;
-    ctx->hdr->stats.lvl[level].part_count++;
+    mctx->map->stats.part_class_count[size_class]++;
+    mctx->map->stats.lvl[level].total_alloc_b += part_size;
+    mctx->map->stats.lvl[level].part_count++;
     // Return partition.
     return part;
 }
 
 /// Frees a no longer used and no longer referenced partition.
-static inline void qk_part_alloc_free(qk_ctx_t* ctx, uint8_t level, qk_part_t* part) {
+static inline void qk_part_alloc_free(qk_map_ctx_t* mctx, uint8_t level, qk_part_t* part) {
     // Free partition.
     uint8_t size_class;
     uint64_t total_size = part->total_size;
-    qk_vm_free(ctx, part, total_size, &size_class);
+    qk_vm_free(mctx, part, total_size, &size_class);
     // Update statistics.
-    ctx->hdr->stats.part_class_count[size_class]--;
-    ctx->hdr->stats.lvl[level].total_alloc_b -= total_size;
-    ctx->hdr->stats.lvl[level].part_count--;
+    mctx->map->stats.part_class_count[size_class]--;
+    mctx->map->stats.lvl[level].total_alloc_b -= total_size;
+    mctx->map->stats.lvl[level].part_count--;
 }
 
 /// Returns the number of bytes required to store a certain key/value pair at a certain level.
@@ -135,7 +135,7 @@ static inline void* qk_write_entry_data(uint8_t level, void* write0, fstr_t key,
 ///     - Updating the returned right and left down pointer references
 ///       as required/applicable.
 static void qk_part_insert_entry(
-    qk_hdr_t* hdr, uint8_t level,
+    qk_map_t* map, uint8_t level,
     qk_part_t* dst_part, qk_idx_t* idxT,
     fstr_t key, fstr_t value,
     qk_part_t*** out_downL, qk_part_t*** out_downR
@@ -164,8 +164,8 @@ static void qk_part_insert_entry(
     dst_part->n_keys++;
     dst_part->data_size += data_alloc;
     // Update statistics.
-    hdr->stats.lvl[level].ent_count++;
-    hdr->stats.lvl[level].data_alloc_b += data_alloc;
+    map->stats.lvl[level].ent_count++;
+    map->stats.lvl[level].data_alloc_b += data_alloc;
     // Resolve left down pointer if requested.
     if (level > 0 && out_downL != 0) {
         *out_downL = (idxT > idx0)? qk_idx1_get_down_ptr(idxT - 1): 0;
@@ -173,7 +173,7 @@ static void qk_part_insert_entry(
 }
 
 static void qk_part_delete_entry(
-    qk_hdr_t* hdr, uint8_t level,
+    qk_map_t* map, uint8_t level,
     qk_part_t* part, qk_idx_t* idxT, bool rm_key
 ) {
     assert(part->n_keys > 0);
@@ -195,14 +195,14 @@ static void qk_part_delete_entry(
         }
     }
     part->data_size -= ent_dsize;
-    hdr->stats.lvl[level].data_alloc_b -= ent_dsize;
+    map->stats.lvl[level].data_alloc_b -= ent_dsize;
     if (rm_key) {
         // Erase key by moving all right keys to the left.
         if (idxT < idxE - 1) {
             memmove(idxT, idxT + 1, sizeof(*idxT) * (idxE - idxT - 1));
         }
         part->n_keys--;
-        hdr->stats.lvl[level].ent_count--;
+        map->stats.lvl[level].ent_count--;
     }
 }
 
@@ -220,9 +220,9 @@ static inline uint64_t qk_part_free_space(qk_part_t* part) {
 /// The new partition has all internal pointers updated as required.
 /// The function will however not update any external references, it leaves
 /// that responsibility to the caller.
-static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, uint8_t level, qk_part_t* part, uint64_t req_space) {
+static qk_part_t* qk_part_realloc(qk_map_ctx_t* mctx, uint8_t level, qk_part_t* part, uint64_t req_space) {
     // Allocate replacement partition.
-    qk_part_t* new_part = qk_part_alloc_new(ctx, level, part->total_size + req_space);
+    qk_part_t* new_part = qk_part_alloc_new(mctx, level, part->total_size + req_space);
     // Copy data of entities. No internal translation is required.
     {
         void* data_dst = ((void*) new_part) + new_part->total_size - part->data_size;
@@ -245,7 +245,7 @@ static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, uint8_t level, qk_part_t* part,
     new_part->n_keys = part->n_keys;
     new_part->data_size = part->data_size;
     // Free old partition.
-    qk_part_alloc_free(ctx, level, part);
+    qk_part_alloc_free(mctx, level, part);
     // Using new expanded partition now.
     assert(qk_part_free_space(new_part) >= req_space);
     return new_part;
@@ -253,12 +253,12 @@ static qk_part_t* qk_part_realloc(qk_ctx_t* ctx, uint8_t level, qk_part_t* part,
 
 /// Expands partition so one more entity can be inserted.
 /// Translate target index after reallocation is complete and returns the new partition.
-static qk_part_t* qk_part_insert_expand(qk_ctx_t* ctx, uint8_t level, qk_part_t* part, uint64_t req_space, qk_idx_t** io_idxT) {
+static qk_part_t* qk_part_insert_expand(qk_map_ctx_t* mctx, uint8_t level, qk_part_t* part, uint64_t req_space, qk_idx_t** io_idxT) {
     //x-dbg/ DBGFN("reallocating partition ", part);
     // We must reallocate the partition so we can have room for insert.
     void* old_part_ptr = part;
     uint64_t old_size = part->total_size;
-    qk_part_t* new_part = qk_part_realloc(ctx, level, part, req_space);
+    qk_part_t* new_part = qk_part_realloc(mctx, level, part, req_space);
     // Translate reference to target index. This faster than doing a new lookup.
     int64_t part_offs = (void*) new_part - (void*) part;
     *io_idxT = ((void*) *io_idxT) + part_offs;
@@ -353,18 +353,18 @@ typedef struct lookup_op {
 } lookup_op_t;
 
 /// Quark lookup with specified operation.
-static inline bool qk_lookup(qk_ctx_t* ctx, lookup_op_t op, lookup_res_t* out_r) {
+static inline bool qk_lookup(qk_map_ctx_t* mctx, lookup_op_t op, lookup_res_t* out_r) {
     if (op.mode == lookup_mode_key)
         qk_check_keylen(op.key);
-    qk_hdr_t* hdr = ctx->hdr;
-    CASSERT(LENGTHOF(out_r->target) == LENGTHOF(hdr->root));
+    qk_map_t* map = mctx->map;
+    CASSERT(LENGTHOF(out_r->target) == LENGTHOF(map->root));
     bool following_root = true;
     qk_part_t** ref;
     qk_part_t* part;
-    for (size_t i_lvl = LENGTHOF(hdr->root) - 1;; i_lvl--) {
+    for (size_t i_lvl = LENGTHOF(map->root) - 1;; i_lvl--) {
         // Resolve partition and register it.
         if (following_root) {
-            ref = &hdr->root[i_lvl];
+            ref = &map->root[i_lvl];
             part = *ref;
         }
         assert(part != 0);
@@ -436,13 +436,13 @@ static inline bool qk_lookup(qk_ctx_t* ctx, lookup_op_t op, lookup_res_t* out_r)
     }
 }
 
-bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
+bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
     lookup_op_t op = {
         .mode = lookup_mode_key,
         .key = key,
     };
     lookup_res_t r;
-    if (!qk_lookup(ctx, op, &r)) {
+    if (!qk_lookup(mctx, op, &r)) {
         // Update require key to exist.
         return false;
     }
@@ -456,8 +456,8 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
         }
     } else { // (new_value.len != cur_value.len)
         // Delete the entry data by moving everything on the left into it.
-        qk_hdr_t* hdr = ctx->hdr;
-        qk_part_delete_entry(hdr, 0, part, idxT, false);
+        qk_map_t* map = mctx->map;
+        qk_part_delete_entry(map, 0, part, idxT, false);
         // Insert the new value now.
         if (new_value.len > cur_value.len) {
             // Expand may be required.
@@ -467,7 +467,7 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
             if (free_space < req_space) {
                 //x-dbg/ DPRINT("expand required: ", req_space, " > ", free_space);
                 // Reallocate the partition to expand it and translate the index target.
-                qk_part_t* new_part = qk_part_insert_expand(ctx, 0, part, req_space, &idxT);
+                qk_part_t* new_part = qk_part_insert_expand(mctx, 0, part, req_space, &idxT);
                 // Update old partition reference (root pointer or a down pointer) to point to new partition.
                 assert(*r.ref0 == part);
                 *r.ref0 = new_part;
@@ -484,18 +484,18 @@ bool qk_update(qk_ctx_t* ctx, fstr_t key, fstr_t new_value) {
         // Adjust data size.
         size_t ent_dsize = (write0 - writeD);
         part->data_size += ent_dsize;
-        hdr->stats.lvl[0].data_alloc_b += ent_dsize;
+        map->stats.lvl[0].data_alloc_b += ent_dsize;
     }
     return true;
 }
 
-bool qk_get(qk_ctx_t* ctx, fstr_t key, fstr_t* out_value) {
+bool qk_get(qk_map_ctx_t* mctx, fstr_t key, fstr_t* out_value) {
     lookup_op_t op = {
         .mode = lookup_mode_key,
         .key = key,
     };
     lookup_res_t r;
-    if (qk_lookup(ctx, op, &r)) {
+    if (qk_lookup(mctx, op, &r)) {
         *out_value = qk_idx0_get_value(r.target[0].idxT);
         return true;
     } else {
@@ -563,8 +563,8 @@ bool qk_seek_lvl0_part_fwd(lookup_res_t* r, uint8_t level) {
 
 /// Seek backward to previous level 0 partition with appropriate side
 /// effects on lookup result.
-bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
-    qk_hdr_t* hdr = ctx->hdr;
+bool qk_seek_lvl0_part_rev(qk_map_ctx_t* mctx, lookup_res_t* r, uint8_t level) {
+    qk_map_t* map = mctx->map;
     for (;;) {
         assert(level < LENGTHOF(r->target));
         // Get level position and target index.
@@ -591,7 +591,7 @@ bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
             return true;
         }
         next_lvl:
-        if (part == hdr->root[level]) {
+        if (part == map->root[level]) {
             // Reached smallest key/value pair supported by this root level.
             // Need to travel to lower root.
             do {
@@ -600,7 +600,7 @@ bool qk_seek_lvl0_part_rev(qk_ctx_t* ctx, lookup_res_t* r, uint8_t level) {
                     return false;
                 }
                 level--;
-                part = hdr->root[level];
+                part = map->root[level];
             } while (part == r->target[level].part);
             r->target[level].part = part;
             r->target[level].idxT = qk_part_get_idx0(part) + part->n_keys;
@@ -636,7 +636,7 @@ static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* en
     return (limit == 0 || *ent_count < limit);
 }
 
-uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) {
+uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) {
     // Initialize default return values.
     // End of "file" is only set to false if band runs out.
     bool end_of_file = true;
@@ -651,14 +651,14 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
             .mode = lookup_mode_key,
             .key = op.key_start,
         };
-        start_equal = qk_lookup(ctx, l_op, &r);
+        start_equal = qk_lookup(mctx, l_op, &r);
     } else {
         // Initial lookup/seek to index start/end.
         lookup_op_t l_op = {
             .mode = (op.descending? lookup_mode_last: lookup_mode_first),
             .key = op.key_start,
         };
-        qk_lookup(ctx, l_op, &r);
+        qk_lookup(mctx, l_op, &r);
         // Made an infinite positive/negative lookup that never matches exactly.
         start_equal = false;
     }
@@ -673,7 +673,7 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
         if (op.descending) {
             // Descending seek, i.e. reverse.
             // Target index is too high or at invalid, seek back.
-            if (!qk_seek_lvl0_part_rev(ctx, &r, 0)) {
+            if (!qk_seek_lvl0_part_rev(mctx, &r, 0)) {
                 goto scan_done;
             }
         } else {
@@ -741,7 +741,7 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
                 // Descending seek, i.e. reverse.
                 idxT--;
                 if (idxT < idx0) {
-                    if (!qk_seek_lvl0_part_rev(ctx, &r, 1)) {
+                    if (!qk_seek_lvl0_part_rev(mctx, &r, 1)) {
                         goto scan_done;
                     }
                     break;
@@ -764,20 +764,20 @@ uint64_t qk_scan(qk_ctx_t* ctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) 
     return ent_count;
 }
 
-bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
+bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {
     qk_check_keylen(key);
-    qk_hdr_t* hdr = ctx->hdr;
+    qk_map_t* map = mctx->map;
     // Calculate the level to insert node at through a series of presumably heavily biased coin tosses.
     // Due to the heavy bias of the coin toss it should be faster to do this numerically than using software math.
-    uint64_t dspace = MAX(hdr->target_ipp, 1) + 1ULL;
+    uint64_t dspace = MAX(map->target_ipp, 1) + 1ULL;
     uint8_t insert_lvl = 0;
     do {
         uint64_t rnd64, dice;
         // Get 64 bit of random entropy.
-        if (hdr->dtrm_seed == 0) {
+        if (map->dtrm_seed == 0) {
             rnd64 = lwt_rdrand64();
         } else {
-            rnd64 = hmap_murmurhash_64a(key.str, key.len, hdr->dtrm_seed + insert_lvl);
+            rnd64 = hmap_murmurhash_64a(key.str, key.len, map->dtrm_seed + insert_lvl);
         }
         // Translate to dice space.
         dice = rnd64 % dspace;
@@ -787,7 +787,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
         if (dice != 0)
             break;
         insert_lvl++;
-    } while (insert_lvl < LENGTHOF(hdr->root) - 1);
+    } while (insert_lvl < LENGTHOF(map->root) - 1);
     //x-dbg/ DBGFN("inserting [", key, "] => [", value, "] on level #", insert_lvl);
     // We have generated a fair insert level and is ready to begin insert.
     // Read phase: Search from top level to:
@@ -803,7 +803,7 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
         .found_abort = true,
     };
     lookup_res_t r;
-    if (qk_lookup(ctx, op, &r)) {
+    if (qk_lookup(mctx, op, &r)) {
         // Key already inserted!
         return false;
     }
@@ -823,13 +823,13 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
             uint64_t free_space = qk_part_free_space(part);
             if (free_space < req_space) {
                 // Reallocate the partition to expand it and translate the index target.
-                part = qk_part_insert_expand(ctx, i_lvl, part, req_space, &idxT);
+                part = qk_part_insert_expand(mctx, i_lvl, part, req_space, &idxT);
                 // Update old partition reference (root pointer or a down pointer) to point to new partition.
                 *r.refI = part;
             }
             // Insert the entity now at the resolved target index.
             // Also resolve initial left and right down reference for split phase.
-            qk_part_insert_entry(hdr, i_lvl, part, idxT, key, value, &downL, &downR);
+            qk_part_insert_entry(map, i_lvl, part, idxT, key, value, &downL, &downR);
         } else {
             assert(i_lvl < insert_lvl);
             // Partition split mode.
@@ -861,8 +861,8 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 partL = part;
                 // We allocate the right partition and insert on instead so no data move is required.
                 //x-dbg/ DBGFN("new splitting partition ", part, " on level #", i_lvl);
-                partR = qk_part_alloc_new(ctx, i_lvl, req_space);
-                qk_part_insert_entry(hdr, i_lvl, partR, 0, key, value, 0, &next_downR);
+                partR = qk_part_alloc_new(mctx, i_lvl, req_space);
+                qk_part_insert_entry(map, i_lvl, partR, 0, key, value, 0, &next_downR);
             } else {
                 // Standard "hard" split.
                 // Calculate required space for new left and right partition.
@@ -870,17 +870,17 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                 assert(idxT != 0);
                 uint64_t spaceL = qk_space_range_level(i_lvl, idx0, idxT);
                 // Allocate new left partition.
-                partL = qk_part_alloc_new(ctx, i_lvl, spaceL);
+                partL = qk_part_alloc_new(mctx, i_lvl, spaceL);
                 // Update left down pointer to point to the new left partition.
                 if (downL != 0) {
-                    assert(hdr->root[i_lvl] != part);
+                    assert(map->root[i_lvl] != part);
                     assert(*downL == part);
                     *downL = partL;
                 } else {
                     // Root entry partitions are not referenced by any down pointer
                     // so in that and only that case we get a null downL.
-                    assert(hdr->root[i_lvl] == part);
-                    hdr->root[i_lvl] = partL;
+                    assert(map->root[i_lvl] == part);
+                    map->root[i_lvl] = partL;
                 }
                 if (left_empty) {
                     assert(downL == 0);
@@ -890,22 +890,22 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
                     uint64_t free_space = qk_part_free_space(partR);
                     if (free_space < req_space) {
                         // Reallocate the partition to expand it and translate the index target.
-                        partR = qk_part_insert_expand(ctx, i_lvl, partR, req_space, &idxT);
+                        partR = qk_part_insert_expand(mctx, i_lvl, partR, req_space, &idxT);
                     }
                     // Insert to front of partition.
-                    qk_part_insert_entry(hdr, i_lvl, partR, idxT, key, value, 0, &next_downR);
+                    qk_part_insert_entry(map, i_lvl, partR, idxT, key, value, 0, &next_downR);
                 } else {
                     // Allocate new right partition.
                     uint64_t spaceR = req_space + qk_space_range_level(i_lvl, idxT, idxE);
-                    partR = qk_part_alloc_new(ctx, i_lvl, spaceR);
+                    partR = qk_part_alloc_new(mctx, i_lvl, spaceR);
                     // Copy all entries to the left over to the left partition.
                     qk_part_insert_entry_range(i_lvl, partL, idx0, idxT);
                     // First element we insert in right partition is the new entity.
-                    qk_part_insert_entry(hdr, i_lvl, partR, 0, key, value, 0, &next_downR);
+                    qk_part_insert_entry(map, i_lvl, partR, 0, key, value, 0, &next_downR);
                     // Copy all entries to the right over to the right partition.
                     qk_part_insert_entry_range(i_lvl, partR, idxT, idxE);
                     // Deallocate the old partition.
-                    qk_part_alloc_free(ctx, i_lvl, part);
+                    qk_part_alloc_free(mctx, i_lvl, part);
                 }
             }
             // Split complete.
@@ -937,16 +937,16 @@ bool qk_insert(qk_ctx_t* ctx, fstr_t key, fstr_t value) {
     return true;
 }
 
-bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
+bool qk_delete(qk_map_ctx_t* mctx, fstr_t key) {
     qk_check_keylen(key);
-    qk_hdr_t* hdr = ctx->hdr;
+    qk_map_t* map = mctx->map;
     // Lookup key.
     lookup_op_t op = {
         .mode = lookup_mode_key,
         .key = key,
     };
     lookup_res_t r;
-    if (!qk_lookup(ctx, op, &r)) {
+    if (!qk_lookup(mctx, op, &r)) {
         // Key does not exist.
         return false;
     }
@@ -958,7 +958,7 @@ bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
         qk_idx_t* idxT = r.target[i_lvl].idxT;
         if (i_lvl == r.insert_lvl) {
             // Remove the key/value from the partition.
-            qk_part_delete_entry(hdr, i_lvl, part, idxT, true);
+            qk_part_delete_entry(map, i_lvl, part, idxT, true);
             // Go down to next level.
             if (i_lvl == 0)
                 break;
@@ -966,8 +966,8 @@ bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
             qk_idx_t* idx0 = qk_part_get_idx0(part);
             if (idxT == idx0) {
                 // Root to the left, follow root down. (We would otherwise have seen this key on a higher insert level.)
-                assert(part == hdr->root[i_lvl]);
-                downL = &hdr->root[i_lvl - 1];
+                assert(part == map->root[i_lvl]);
+                downL = &map->root[i_lvl - 1];
             } else {
                 // Follow left down pointer down. This reference could have changed after the delete
                 // entry operation (by data move) which is why we take the reference here.
@@ -982,8 +982,8 @@ bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
             assert(partR->n_keys > 0);
             qk_idx_t* idxR0 = qk_part_get_idx0(partR);
             size_t ent_dsize = qk_space_idx_data_level(i_lvl, idxR0);
-            hdr->stats.lvl[i_lvl].data_alloc_b -= ent_dsize;
-            hdr->stats.lvl[i_lvl].ent_count--;
+            map->stats.lvl[i_lvl].data_alloc_b -= ent_dsize;
+            map->stats.lvl[i_lvl].ent_count--;
             // Copy everything in the dangling right partition into left partition.
             if (partR->n_keys > 1) {
                 qk_idx_t* idxRE = idxR0 + partR->n_keys;
@@ -995,7 +995,7 @@ bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
                 }
                 if (free_space < req_space) {
                     // Reallocate left partition with required space.
-                    partL = qk_part_realloc(ctx, i_lvl, partL, req_space);
+                    partL = qk_part_realloc(mctx, i_lvl, partL, req_space);
                     // Update old partition reference (root pointer or a down pointer) to point to new partition.
                     *downL = partL;
                 }
@@ -1003,15 +1003,15 @@ bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
                 qk_part_insert_entry_range(i_lvl, partL, idxR0 + 1, idxRE);
             }
             // Deallocate the dangling right partition.
-            qk_part_alloc_free(ctx, i_lvl, partR);
+            qk_part_alloc_free(mctx, i_lvl, partR);
             // Go down to next level.
             if (i_lvl == 0)
                 break;
             // Resolve the next left partition.
             if (partL->n_keys == 0) {
                 // Root to the left, follow root down.
-                assert(partL == hdr->root[i_lvl]);
-                downL = &hdr->root[i_lvl - 1];
+                assert(partL == map->root[i_lvl]);
+                downL = &map->root[i_lvl - 1];
             } else {
                 // Follow left partition right most down pointer down to find next left most partition to merge with.
                 qk_idx_t* idxL0 = qk_part_get_idx0(partL);
@@ -1023,33 +1023,40 @@ bool qk_delete(qk_ctx_t* ctx, fstr_t key) {
     return true;
 }
 
-json_value_t qk_get_stats(qk_ctx_t* ctx) {
-    qk_hdr_t* hdr = ctx->hdr;
+json_value_t qk_get_stats(qk_map_ctx_t* mctx) {
+    qk_map_t* map = mctx->map;
     json_value_t levels = jarr_new();
-    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->stats.lvl); i_lvl++) {
+    for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(map->stats.lvl); i_lvl++) {
         json_append(levels, jobj_new(
             {"level", jnum(i_lvl)},
-            {"ent_count", jnum(hdr->stats.lvl[i_lvl].ent_count)},
-            {"part_count", jnum(hdr->stats.lvl[i_lvl].part_count)},
-            {"total_alloc_b", jnum(hdr->stats.lvl[i_lvl].total_alloc_b)},
-            {"data_alloc_b", jnum(hdr->stats.lvl[i_lvl].data_alloc_b)},
+            {"ent_count", jnum(map->stats.lvl[i_lvl].ent_count)},
+            {"part_count", jnum(map->stats.lvl[i_lvl].part_count)},
+            {"total_alloc_b", jnum(map->stats.lvl[i_lvl].total_alloc_b)},
+            {"data_alloc_b", jnum(map->stats.lvl[i_lvl].data_alloc_b)},
         ));
     }
     json_value_t part_class_count = jobj_new();
-    for (uint8_t class = 0; class < LENGTHOF(hdr->stats.part_class_count); class++) {
-        uint64_t count = hdr->stats.part_class_count[class];
+    for (uint8_t class = 0; class < LENGTHOF(map->stats.part_class_count); class++) {
+        uint64_t count = map->stats.part_class_count[class];
         if (count == 0)
             continue;
         JSON_SET(part_class_count, concs(qk_atoms_2e_to_bytes(class), "b"), jnum(count));
     }
     return jobj_new(
-        {"entry_cap", jnum(ctx->entry_cap)},
+        {"entry_cap", jnum(mctx->entry_cap)},
         {"levels", levels},
         {"part_class_count", part_class_count},
     );
 }
 
-qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
+static int cmp_qk_map(const struct avltree_node* a, const struct avltree_node* b) {
+    qk_map_t* a_map = AVLTREE_NODE2ELEM(qk_map_t, node, a);
+    qk_map_t* b_map = AVLTREE_NODE2ELEM(qk_map_t, node, b);
+    int64_t cmp = fstr_cmp(a_map->name, b_map->name);
+    return (cmp < 0? -1: (cmp > 0? 1: 0));
+}
+
+qk_ctx_t* qk_open(acid_h* ah) {
     // Create context.
     fstr_t am = acid_memory(ah);
     qk_ctx_t new_ctx = {
@@ -1059,51 +1066,96 @@ qk_ctx_t* qk_open(acid_h* ah, qk_opt_t* opt) {
     qk_ctx_t* ctx = cln(&new_ctx);
     // Read quark header.
     qk_hdr_t* hdr = ctx->hdr;
-    bool tune_target_ipp;
     if (hdr->magic == 0) {
         // This is a new database, initialize it.
         memset(hdr, 0, sizeof(*hdr));
         hdr->magic = QK_HEADER_MAGIC;
         hdr->version = QK_VERSION;
-        // Allocate root entry partitions for all levels.
-        for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(hdr->root); i_lvl++) {
-            hdr->root[i_lvl] = qk_part_alloc_new(ctx, i_lvl, 0);
-        }
-        tune_target_ipp = true;
+        avltree_init(&hdr->maps, cmp_qk_map, true);
     } else if (hdr->magic == QK_HEADER_MAGIC) {
         // We are opening an existing database.
         if (hdr->version != QK_VERSION) {
             throw("bad database version", exception_io);
         }
-        tune_target_ipp = opt->overwrite_target_ipp;
+        // Initialize map compare function pointer that could have changed.
+        hdr->maps.cmp_fn = cmp_qk_map;
     } else {
         // This is not a valid database.
         throw("corrupt or invalid database", exception_io);
     }
-    // Tune target partition size if requested.
-    if (tune_target_ipp) {
-        hdr->target_ipp = ((opt->target_ipp != 0)? opt->target_ipp: QK_DEFAULT_TARGET_IPP);
-    }
-    // Write deterministic seed setting.
-    hdr->dtrm_seed = opt->dtrm_seed;
     // Increment session and complete first fsync to fail here if write does not work.
     hdr->session++;
     acid_fsync(ah);
+    // Return with context.
+    return ctx;
+}
+
+qk_map_ctx_t* qk_open_map(qk_ctx_t* ctx, fstr_t name, qk_opt_t* opt) {
+    // Validate name size.
+    if (name.len > PAGE_SIZE - sizeof(qk_ctx_t)) {
+        throw("invalid length of qk map name", exception_arg);
+    }
+    // Create context.
+    qk_map_ctx_t new_mctx = {
+        .ctx = ctx,
+    };
+    qk_map_ctx_t* mctx = cln(&new_mctx);
+    // Lookup the map.
+    qk_map_t* map = AVLTREE_LOOKUP_KEY(qk_map_t, node, &ctx->hdr->maps, name);
+    bool tune_target_ipp;
+    if (map == 0) {
+        // Allocate new map with this name.
+        map = qk_vm_mmap_raw(ctx, PAGE_SIZE);
+        memset(map, 0, sizeof(*map));
+        mctx->map = map;
+        // Initialize name by copying into the new allocation.
+        void* name_ptr = map + 1;
+        memcpy(name_ptr, name.str, name.len);
+        map->name.len = name.len;
+        map->name.str = name_ptr;
+        // Allocate root entry partitions for all levels.
+        for (uint8_t i_lvl = 0; i_lvl < LENGTHOF(map->root); i_lvl++) {
+            map->root[i_lvl] = qk_part_alloc_new(mctx, i_lvl, 0);
+        }
+        // Insert map into the tree.
+        struct avltree_node* enode = avltree_insert(&map->node, &ctx->hdr->maps);
+        if (enode != 0) {
+            throw("map insert failed: name already exists (data structure corrupt)", exception_fatal);
+        }
+        // Initialize target ipp.
+        tune_target_ipp = true;
+    } else {
+        mctx->map = map;
+        // Only override ipp if not using default.
+        tune_target_ipp = (opt->target_ipp != 0);
+    }
+    // Tune target partition size if requested.
+    if (tune_target_ipp) {
+        map->target_ipp = ((opt->target_ipp != 0)? opt->target_ipp: QK_DEFAULT_TARGET_IPP);
+    }
+    // Write deterministic seed setting.
+    map->dtrm_seed = opt->dtrm_seed;
+    // Write open session and fsync.
+    if (map->asession >= ctx->hdr->session) {
+        throw("map open failed: map already opened this session", exception_fatal);
+    }
+    map->asession = ctx->hdr->session;
+    acid_fsync(ctx->ah);
     // Calculate entry capacity. Clang crashes if we attempt to assign UINT128_MAX
     // to a stack variable so we complicate this implementation slightly.
-    uint16_t target_ipp = hdr->target_ipp;
+    uint16_t target_ipp = map->target_ipp;
     uint128_t entry_cap = 0;
     for (uint8_t i_lvl = 0;; i_lvl++) {
         if (!arth_safe_mul_uint128(entry_cap, target_ipp, &entry_cap)) {
-            ctx->entry_cap = UINT128_MAX;
+            mctx->entry_cap = UINT128_MAX;
             break;
-        } else if (i_lvl >= LENGTHOF(hdr->root) - 1) {
-            ctx->entry_cap = entry_cap;
+        } else if (i_lvl >= LENGTHOF(map->root) - 1) {
+            mctx->entry_cap = entry_cap;
             break;
         }
     }
-    // Return with context.
-    return ctx;
+    // Return context.
+    return mctx;
 }
 
 fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts) { sub_heap {
