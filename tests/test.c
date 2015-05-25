@@ -477,20 +477,37 @@ static void test1() { sub_heap {
         atest(!qk_band_read(&scan_mem, &key, &value));
     }
     // Test update.
-    rio_debug("test1: update\n");
+    rio_debug("test1: update/upsert\n");
     {
         size_t i = 0;
         for (fstr_t row, tail = capitals; fstr_iterate_trim(&tail, "\n", &row);) { sub_heap {
             fstr_t country, capital;
             if (!fstr_divide(row, ",", &country, &capital))
                 continue;
-            // Test update non-existing key.
-            atest(!qk_update(map, concs(capital, "\x00"), capital));
+            {
+                // Test update non-existing key.
+                fstr_t nek = concs(capital, "\x00");
+                atest(!qk_update(map, nek, capital));
+                // Test upsert of non-existing key.
+                atest(qk_upsert(map, nek, capital));
+                fstr_t value;
+                atest(qk_get(map, nek, &value));
+                atest(fstr_equal(value, capital));
+                atest(!qk_upsert(map, nek, concs(capital, capital)));
+                atest(qk_get(map, nek, &value));
+                atest(fstr_equal(value, concs(capital, capital)));
+                atest(qk_delete(map, nek));
+            }
+            bool upsert = (((i / 3) % 2) == 0);
             if ((i % 3) == 0) {
                 // Test value expand.
                 fstr_t new_value = concs(capital, " of ", country);
                 //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
-                atest(qk_update(map, capital, new_value));
+                if (upsert) {
+                    atest(!qk_upsert(map, capital, new_value));
+                } else {
+                    atest(qk_update(map, capital, new_value));
+                }
                 fstr_t value;
                 atest(qk_get(map, capital, &value));
                 atest(fstr_equal(value, new_value));
@@ -498,7 +515,11 @@ static void test1() { sub_heap {
                 // Test value shrink.
                 fstr_t new_value = fstr_slice(capital, 0, 3);
                 //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
-                atest(qk_update(map, capital, new_value));
+                if (upsert) {
+                    atest(!qk_upsert(map, capital, new_value));
+                } else {
+                    atest(qk_update(map, capital, new_value));
+                }
                 fstr_t value;
                 atest(qk_get(map, capital, &value));
                 atest(fstr_equal(value, new_value));
@@ -506,7 +527,11 @@ static void test1() { sub_heap {
                 // Test value replace.
                 fstr_t new_value = fss(fstr_reverse(country));
                 //x-dbg/ DBGFN("update [", capital, "] => [", new_value, "]");
-                atest(qk_update(map, capital, new_value));
+                if (upsert) {
+                    atest(!qk_upsert(map, capital, new_value));
+                } else {
+                    atest(qk_update(map, capital, new_value));
+                }
                 fstr_t value;
                 atest(qk_get(map, capital, &value));
                 atest(fstr_equal(value, new_value));
