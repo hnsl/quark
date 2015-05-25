@@ -471,8 +471,10 @@ bool qk_band_read(fstr_t* io_mem, fstr_t* out_key, fstr_t* out_value) {
     uint64_t raw_band_len = next_ptr - (void*) band.str;
     *io_mem = fstr_slice(band, raw_band_len, -1);
     // Return key/value.
-    *out_key = key;
-    *out_value = value;
+    if (out_key != 0)
+        *out_key = key;
+    if (out_value != 0)
+        *out_value = value;
     return true;
 }
 
