@@ -19,6 +19,7 @@ typedef struct {
     rio_t* in_h;
     rio_t* out_h;
     dict(qk_map_ctx_t*)* maps;
+    void* cb_ctx_ptr;
     sync_queue_t sq_cur;
     sync_queue_t sq_pnd;
     bool is_dirty;
@@ -117,6 +118,16 @@ static qk_map_ctx_t* resolve_map_ctx(sq_state_t* state, fstr_t map_id) {
     return *map_ptr;
 }
 
+__attribute__((weak))
+void* squark_cb_init_ctx(acid_h* ah, qk_ctx_t* qk, dict(qk_map_ctx_t*)* maps) {
+    return 0;
+}
+
+__attribute__((weak))
+void squark_cb_perform(void* ctx_ptr, fstr_t op_arg) {
+    throw("squark perform callback not implemented", exception_fatal);
+}
+
 join_locked(void) squark_read(join_server_params, sq_state_t* state) {
     for (;;) { sub_heap {
         squark_cmd_t cmd = rio_read_u16(state->in_h);
@@ -204,9 +215,8 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
             break;
         } case SQUARK_CMD_PERFORM: {
             // Run abstract operation.
-            sqk_prfm_cb_t perform_cb = (void*) rio_read_u64(state->in_h);
             fstr_t arg = fss(rio_read_fstr(state->in_h));
-            perform_cb(state->ah, state->qk, state->maps, arg);
+            squark_cb_perform(state->cb_ctx_ptr, arg);
             break;
         } case SQUARK_CMD_STATUS: {
             // Request to read status with a specific id.
@@ -284,6 +294,8 @@ void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
                 }
             }
         }
+        // Initialize callback context. This can leak all sorts of memory.
+        state->cb_ctx_ptr = squark_cb_init_ctx(state->ah, state->qk, state->maps);
         // Spawn fiber that waits on in_h and reads.
         fmitosis {
             rio_epoll_t* stdin_epoll = rio_epoll_create(state->in_h, rio_epoll_event_inlvl);
@@ -448,11 +460,10 @@ void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) {
     }
 }
 
-void squark_op_perform(squark_t* sq, sqk_prfm_cb_t perform_cb, fstr_t arg) {
+void squark_op_perform(squark_t* sq, fstr_t op_arg) {
     uninterruptible {
         rio_write_u16(sq->out_h, SQUARK_CMD_PERFORM, true);
-        rio_write_u64(sq->out_h, (uint64_t) perform_cb, true);
-        rio_write_fstr(sq->out_h, arg);
+        rio_write_fstr(sq->out_h, op_arg);
     }
 }
 

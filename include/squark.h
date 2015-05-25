@@ -18,7 +18,14 @@ typedef struct squark {
 
 dict(qk_map_ctx_t);
 
-typedef void (*sqk_prfm_cb_t)(acid_h* ah, qk_ctx_t* qk, dict(qk_map_ctx_t*)* maps, fstr_t arg);
+/// Implement this function to initialize necessary context to any callback functions like squark_cb_perform().
+/// Any memory leaked from the function will persist for as long as the squark is running.
+/// The returned pointer will be passed as ctx_ptr to callback functions.
+/// When this function is not implemented the ctx_ptr will be 0.
+void* squark_cb_init_ctx(acid_h* ah, qk_ctx_t* qk, dict(qk_map_ctx_t*)* maps);
+
+/// Implement this function to use with squark_op_perform().
+void squark_cb_perform(void* ctx_ptr, fstr_t op_arg);
 
 /// Squark main. Should be called from program main.
 /// Will not return if main arguments indicate a squark spawn, i.e. first argument is "squark".
@@ -49,9 +56,10 @@ void squark_op_insert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value);
 /// This call will uninterruptibly block if pipe is full.
 void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value);
 
-/// Performs an abstract operation. Buffers data in the squark pipe without waiting for reply.
+/// Performs an abstract operation. Calls the custom implementation of squark_cb_perform().
+/// Buffers data in the squark pipe without waiting for reply.
 /// This call will uninterruptibly block if pipe is full.
-void squark_op_perform(squark_t* sq, sqk_prfm_cb_t perform_cb, fstr_t arg);
+void squark_op_perform(squark_t* sq, fstr_t op_arg);
 
 /// Starts an asynchronous status operation. Call squark_get_scan_res() with returned
 /// fiber id to block while waiting for the result.
