@@ -711,18 +711,9 @@ uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_
     return ent_count;
 }
 
-bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
-    lookup_op_t op = {
-        .mode = lookup_mode_key,
-        .key = key,
-    };
-    lookup_res_t r;
-    if (!qk_lookup(mctx, op, &r)) {
-        // Update require key to exist.
-        return false;
-    }
-    qk_part_t* part = r.target[0].part;
-    qk_idx_t* idxT = r.target[0].idxT;
+static void qk_update_ent(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value, lookup_res_t* r) {
+    qk_part_t* part = r->target[0].part;
+    qk_idx_t* idxT = r->target[0].idxT;
     fstr_t cur_value = qk_idx0_get_value(idxT);
     if (new_value.len == cur_value.len) {
         // Replace in-place.
@@ -744,8 +735,8 @@ bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
                 // Reallocate the partition to expand it and translate the index target.
                 qk_part_t* new_part = qk_part_insert_expand(mctx, 0, part, req_space, &idxT);
                 // Update old partition reference (root pointer or a down pointer) to point to new partition.
-                assert(*r.ref0 == part);
-                *r.ref0 = new_part;
+                assert(*(r->ref0) == part);
+                *(r->ref0) = new_part;
                 part = new_part;
             }
         }
@@ -761,10 +752,24 @@ bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
         part->data_size += ent_dsize;
         map->stats.lvl[0].data_alloc_b += ent_dsize;
     }
+}
+
+bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
+    lookup_op_t op = {
+        .mode = lookup_mode_key,
+        .key = key,
+    };
+    lookup_res_t r;
+    if (!qk_lookup(mctx, op, &r)) {
+        // Update require key to exist.
+        return false;
+    }
+    // Perform update of looked up entity now.
+    qk_update_ent(mctx, key, new_value, &r);
     return true;
 }
 
-bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {
+static bool qk_xsert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value, bool upsert) {
     qk_check_keylen(key);
     qk_map_t* map = mctx->map;
     // Calculate the level to insert node at through a series of presumably heavily biased coin tosses.
@@ -800,11 +805,17 @@ bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {
         .key = key,
         .insert_idx = true,
         .insert_lvl = insert_lvl,
-        .found_abort = true,
+        .found_abort = !upsert,
     };
     lookup_res_t r;
     if (qk_lookup(mctx, op, &r)) {
         // Key already inserted!
+        if (upsert) {
+            // Perform update of looked up value now.
+            qk_update_ent(mctx, key, value, &r);
+        } else {
+            // Insert require key to not exist.
+        }
         return false;
     }
     // Write phase.
@@ -935,6 +946,14 @@ bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {
     }
     // Insert complete.
     return true;
+}
+
+bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {
+    return qk_xsert(mctx, key, value, false);
+}
+
+bool qk_upsert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {
+    return qk_xsert(mctx, key, value, true);
 }
 
 bool qk_delete(qk_map_ctx_t* mctx, fstr_t key) {

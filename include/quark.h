@@ -102,6 +102,12 @@ bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value);
 /// The function returns true if the key did not exist and was inserted, otherwise false.
 bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value);
 
+/// Upserts a key/value pair into a quark database.
+/// Exactly like qk_insert() but operation falls back into optimized update if the key is found.
+/// The function returns true if the key did not exist and was inserted, otherwise false
+/// if the key was found and updated.
+bool qk_upsert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value);
+
 /// Deletes a key/value pair from the quark database.
 /// The function returns true if the key existed and was removed, otherwise false.
 bool qk_delete(qk_map_ctx_t* mctx, fstr_t key);
