@@ -559,28 +559,51 @@ bool qk_seek_lvl0_part_rev(qk_map_ctx_t* mctx, lookup_res_t* r, uint8_t level) {
     }
 }
 
-static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* ent_count, uint64_t limit, bool* out_eof) {
+static inline bool qk_band_write(qk_idx_t* idxT, fstr_t* band_tail, uint64_t* ent_count, uint64_t limit, bool ignore_data, bool* out_eof) {
     // Check if we have reached the limit for the number of items we may scan.
     if (limit > 0 && *ent_count >= limit)
         return false;
-    // Check if we have space on remaining band to do the copy.
-    size_t dsize = qk_space_idx_data_level(0, idxT);
-    size_t req_space = sizeof(uint16_t) + dsize;
-    if (band_tail->len < req_space) {
-        // Buffer has run out. This is the only situation where we use false eof.
-        *out_eof = false;
-        return false;
+    if (ignore_data) {
+        // Only copy over key, ignore value.
+        // Check if we have space on remaining band to do the copy.
+        size_t req_space = sizeof(uint16_t) + idxT->keylen + sizeof(uint64_t);
+        if (band_tail->len < req_space)
+            goto no_more_space;
+        // Write key only to band. Emulate zero length value.
+        void* band_ptr = band_tail->str;
+        *((uint16_t*) band_ptr) = idxT->keylen;
+        band_ptr += sizeof(uint16_t);
+        memcpy(band_ptr, idxT->keyptr, idxT->keylen);
+        band_ptr += idxT->keylen;
+        *((uint64_t*) band_ptr) = 0;
+        band_ptr += sizeof(uint64_t);
+        // Update band tail.
+        assert((void*) (band_tail->str) == (band_ptr - req_space));
+        band_tail->str = band_ptr;
+        band_tail->len -= req_space;
+    } else {
+        // Check if we have space on remaining band to do the copy.
+        size_t dsize = qk_space_idx_data_level(0, idxT);
+        size_t req_space = sizeof(uint16_t) + dsize;
+        if (band_tail->len < req_space)
+            goto no_more_space;
+        // Quickly copy over u16 keylen and value blob.
+        *((uint16_t*) band_tail->str) = idxT->keylen;
+        band_tail->str += sizeof(uint16_t);
+        memcpy(band_tail->str, idxT->keyptr, dsize);
+        // Update band tail.
+        band_tail->str += dsize;
+        band_tail->len -= req_space;
     }
-    // Quickly copy over u16 keylen and value blob.
-    *((uint16_t*) band_tail->str) = idxT->keylen;
-    band_tail->str += sizeof(uint16_t);
-    memcpy(band_tail->str, idxT->keyptr, dsize);
-    // Update band tail and entry count.
-    band_tail->str += dsize;
-    band_tail->len -= req_space;
+    // Update band entry count.
     *ent_count = *ent_count + 1;
     // Need only continue scan if we are allowed to write more items to band.
     return (limit == 0 || *ent_count < limit);
+    // Buffer has run out. This is the only situation where we use false eof.
+    no_more_space: {
+        *out_eof = false;
+        return false;
+    }
 }
 
 uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof) {
@@ -670,7 +693,7 @@ uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_
                 if (cmp == 0) {
                     if (op.inc_end) {
                         // Write end k/v pair to band.
-                        qk_band_write(idxT, &band_tail, &ent_count, op.limit, &end_of_file);
+                        qk_band_write(idxT, &band_tail, &ent_count, op.limit, op.ignore_data, &end_of_file);
                     }
                     goto scan_done;
                 }
@@ -680,7 +703,7 @@ uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_
                 }
             }
             // Write k/v pair to band.
-            if (!qk_band_write(idxT, &band_tail, &ent_count, op.limit, &end_of_file)) {
+            if (!qk_band_write(idxT, &band_tail, &ent_count, op.limit, op.ignore_data, &end_of_file)) {
                 goto scan_done;
             }
             // Go to next k/v pair.

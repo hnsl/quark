@@ -69,6 +69,9 @@ typedef struct qk_scan_op {
     /// Default scan does not include entry matching end key.
     /// Set to true to include end key match.
     bool inc_end;
+    /// Default scan includes data.
+    /// Set to true to only copy keys to band and return empty data values.
+    bool ignore_data;
 } qk_scan_op_t;
 
 /// Reads out the next key/value pair from a band scanned by qk_scan() and
