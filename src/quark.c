@@ -436,59 +436,6 @@ static inline bool qk_lookup(qk_map_ctx_t* mctx, lookup_op_t op, lookup_res_t* o
     }
 }
 
-bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
-    lookup_op_t op = {
-        .mode = lookup_mode_key,
-        .key = key,
-    };
-    lookup_res_t r;
-    if (!qk_lookup(mctx, op, &r)) {
-        // Update require key to exist.
-        return false;
-    }
-    qk_part_t* part = r.target[0].part;
-    qk_idx_t* idxT = r.target[0].idxT;
-    fstr_t cur_value = qk_idx0_get_value(idxT);
-    if (new_value.len == cur_value.len) {
-        // Replace in-place.
-        if (cur_value.len > 0) {
-            memcpy(cur_value.str, new_value.str, cur_value.len);
-        }
-    } else { // (new_value.len != cur_value.len)
-        // Delete the entry data by moving everything on the left into it.
-        qk_map_t* map = mctx->map;
-        qk_part_delete_entry(map, 0, part, idxT, false);
-        // Insert the new value now.
-        if (new_value.len > cur_value.len) {
-            // Expand may be required.
-            //x-dbg/ DPRINT("may require expand: ", new_value.len, " > ", cur_value.len);
-            uint64_t free_space = qk_part_free_space(part);
-            uint64_t req_space = qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t);
-            if (free_space < req_space) {
-                //x-dbg/ DPRINT("expand required: ", req_space, " > ", free_space);
-                // Reallocate the partition to expand it and translate the index target.
-                qk_part_t* new_part = qk_part_insert_expand(mctx, 0, part, req_space, &idxT);
-                // Update old partition reference (root pointer or a down pointer) to point to new partition.
-                assert(*r.ref0 == part);
-                *r.ref0 = new_part;
-                part = new_part;
-            }
-        }
-        // Write the new data.
-        //x-dbg/ DPRINT("writing new data");
-        assert(qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t) <= qk_part_free_space(part));
-        void* write0 = qk_part_get_write0(part);
-        void* writeD = qk_write_entry_data(0, write0, key, new_value, 0);
-        // Write the new pointer.
-        idxT->keyptr = writeD;
-        // Adjust data size.
-        size_t ent_dsize = (write0 - writeD);
-        part->data_size += ent_dsize;
-        map->stats.lvl[0].data_alloc_b += ent_dsize;
-    }
-    return true;
-}
-
 bool qk_get(qk_map_ctx_t* mctx, fstr_t key, fstr_t* out_value) {
     lookup_op_t op = {
         .mode = lookup_mode_key,
@@ -762,6 +709,59 @@ uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_
     *io_mem = fstr_detail(band, band_tail);
     *out_eof = end_of_file;
     return ent_count;
+}
+
+bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value) {
+    lookup_op_t op = {
+        .mode = lookup_mode_key,
+        .key = key,
+    };
+    lookup_res_t r;
+    if (!qk_lookup(mctx, op, &r)) {
+        // Update require key to exist.
+        return false;
+    }
+    qk_part_t* part = r.target[0].part;
+    qk_idx_t* idxT = r.target[0].idxT;
+    fstr_t cur_value = qk_idx0_get_value(idxT);
+    if (new_value.len == cur_value.len) {
+        // Replace in-place.
+        if (cur_value.len > 0) {
+            memcpy(cur_value.str, new_value.str, cur_value.len);
+        }
+    } else { // (new_value.len != cur_value.len)
+        // Delete the entry data by moving everything on the left into it.
+        qk_map_t* map = mctx->map;
+        qk_part_delete_entry(map, 0, part, idxT, false);
+        // Insert the new value now.
+        if (new_value.len > cur_value.len) {
+            // Expand may be required.
+            //x-dbg/ DPRINT("may require expand: ", new_value.len, " > ", cur_value.len);
+            uint64_t free_space = qk_part_free_space(part);
+            uint64_t req_space = qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t);
+            if (free_space < req_space) {
+                //x-dbg/ DPRINT("expand required: ", req_space, " > ", free_space);
+                // Reallocate the partition to expand it and translate the index target.
+                qk_part_t* new_part = qk_part_insert_expand(mctx, 0, part, req_space, &idxT);
+                // Update old partition reference (root pointer or a down pointer) to point to new partition.
+                assert(*r.ref0 == part);
+                *r.ref0 = new_part;
+                part = new_part;
+            }
+        }
+        // Write the new data.
+        //x-dbg/ DPRINT("writing new data");
+        assert(qk_space_kv_level(0, key, new_value) - sizeof(qk_idx_t) <= qk_part_free_space(part));
+        void* write0 = qk_part_get_write0(part);
+        void* writeD = qk_write_entry_data(0, write0, key, new_value, 0);
+        // Write the new pointer.
+        idxT->keyptr = writeD;
+        // Adjust data size.
+        size_t ent_dsize = (write0 - writeD);
+        part->data_size += ent_dsize;
+        map->stats.lvl[0].data_alloc_b += ent_dsize;
+    }
+    return true;
 }
 
 bool qk_insert(qk_map_ctx_t* mctx, fstr_t key, fstr_t value) {

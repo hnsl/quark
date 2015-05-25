@@ -43,13 +43,6 @@ typedef struct qk_ctx qk_ctx_t;
 /// Quark map. Opened from a quark context.
 typedef struct qk_map_ctx qk_map_ctx_t;
 
-/// Updates a single value in the quark database with the specified key.
-/// Returns false if the key does not exist.
-/// This function is optimized to mutate values, not remove them or to save space
-/// by shrinking them. Quark does currently not support removing key/value pairs
-/// or freeing already reserved space.
-bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value);
-
 /// Fetches a single value from the quark database from the specified key.
 /// Returns false if the key does not exist.
 bool qk_get(qk_map_ctx_t* mctx, fstr_t key, fstr_t* out_value);
@@ -94,6 +87,13 @@ bool qk_band_read(fstr_t* io_mem, fstr_t* out_key, fstr_t* out_value);
 /// The configuration for the scan is passed via "op".
 /// The function returns the number of key/value pairs copied to the band.
 uint64_t qk_scan(qk_map_ctx_t* mctx, qk_scan_op_t op, fstr_t* io_mem, bool* out_eof);
+
+/// Updates a single value in the quark database with the specified key.
+/// Returns false if the key does not exist.
+/// This function is optimized to mutate values, not remove them or to save space
+/// by shrinking them. Quark does currently not support removing key/value pairs
+/// or freeing already reserved space.
+bool qk_update(qk_map_ctx_t* mctx, fstr_t key, fstr_t new_value);
 
 /// Inserts a key/value pair into quark database.
 /// Will not attempt fsync or snapshot, caller is responsible for this.
