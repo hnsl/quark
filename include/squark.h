@@ -7,6 +7,50 @@
 
 #include "quark.h"
 
+#define SQUARK_SCAN(SQUARK, INIT_OP, MAP_ID, KEY_NAME, VALUE_NAME) \
+    LET(qk_scan_op_t _op = INIT_OP) \
+    LET(fstr_mem_t *_band_mem = 0, *_cur_start_key = 0) \
+    LET(uint64_t _count = 0, _total = 0, _limit = _op.limit) \
+    LET(fstr_t _last_key = {0}) \
+    LET(bool _eof = false) \
+    while ( ({ \
+        if (_last_key.str != 0) { \
+            /* copy start key from band to scan state */ \
+            lwt_alloc_free(_cur_start_key); \
+            _cur_start_key = fstr_cpy(_last_key); \
+            _last_key.str = 0; \
+            /* update operation to use new start key */ \
+            _op.key_start = fss(_cur_start_key); \
+            _op.with_start = true; \
+            _op.inc_start = false; \
+        } \
+        lwt_alloc_free(_band_mem); \
+        /* adjust limit. */ \
+        bool _count_end = false; \
+        if (_limit > 0) { \
+            if (_total >= _limit) { \
+                _count_end = true; \
+            } else { \
+                _op.limit = _limit - _total; \
+            } \
+        } \
+        if (_count_end || _eof) { \
+            /* full scan complete. */ \
+            lwt_alloc_free(_cur_start_key); \
+            break; \
+        } \
+        _eof = squark_scan(SQUARK, MAP_ID, _op, &_band_mem, &_count); \
+    }), true) \
+    LET(fstr_t _band = fss(_band_mem), KEY_NAME, VALUE_NAME) \
+    while ( ({ \
+        if (!qk_band_read(&_band, &KEY_NAME, &VALUE_NAME)) { \
+            /* segment scan complete. */ \
+            break; \
+        } \
+        _total++; \
+        _last_key = KEY_NAME; \
+    }), true)
+
 typedef struct squark {
     bool is_dirty;
     lwt_heap_t* heap;
@@ -81,6 +125,10 @@ rcd_sub_fiber_t* squark_op_scan(squark_t* sq, fstr_t map_id, qk_scan_op_t op);
 /// Killing the squark while calling this function is fine.
 /// In this situation the function will stop blocking and return an empty string.
 fstr_mem_t* squark_get_scan_res(rcd_fid_t scan_fid, uint64_t* out_count, bool* out_eof);
+
+/// More compact squark scan that sends operation and synchronously waits for result.
+/// Returns end of file (true when end of file is reached).
+bool squark_scan(squark_t* sq, fstr_t map_id, qk_scan_op_t op, fstr_mem_t** out_band, uint64_t* out_count);
 
 /// Removes a squark index permanently.
 void squark_rm_index(fstr_t db_dir, fstr_t index_id);

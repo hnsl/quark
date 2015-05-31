@@ -535,6 +535,21 @@ fstr_mem_t* squark_get_scan_res(rcd_fid_t scan_fid, uint64_t* out_count, bool* o
     }
 }}
 
+bool squark_scan(squark_t* sq, fstr_t map_id, qk_scan_op_t op, fstr_mem_t** out_band, uint64_t* out_count) { sub_heap {
+    rcd_sub_fiber_t* scan_sf = squark_op_scan(sq, map_id, op);
+    bool eof;
+    fstr_mem_t* band = squark_get_scan_res(sfid(scan_sf), out_count, &eof);
+    //x-dbg/ DBGFN("got segment scan result count:[", (*out_count), "], eof:[", (eof? "t": "f"), "]");
+    if (!eof) {
+        // Out of band.
+        if (out_count == 0) {
+            throw("scanning data failed, out of squark band and no progress made (ent larger than band buffer)", exception_io);
+        }
+    }
+    *out_band = escape(band);
+    return eof;
+}}
+
 void squark_rm_index(fstr_t db_dir, fstr_t index_id) { sub_heap {
     fstr_t db_path = concs(db_dir, "/", index_id);
     fstr_t data_path = concs(db_path, ".data");
