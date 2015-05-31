@@ -16,7 +16,6 @@ typedef struct {
     rcd_fid_t main_fid;
     acid_h* ah;
     qk_ctx_t* qk;
-    rio_t* in_h;
     rio_t* out_h;
     dict(qk_map_ctx_t*)* maps;
     void* cb_ctx_ptr;
@@ -128,13 +127,13 @@ void squark_cb_perform(void* ctx_ptr, fstr_t op_arg) {
     throw("squark perform callback not implemented", exception_fatal);
 }
 
-join_locked(void) squark_read(join_server_params, sq_state_t* state) {
+join_locked(void) squark_read(rio_t* in_h, join_server_params, sq_state_t* state) {
     for (;;) { sub_heap {
-        squark_cmd_t cmd = rio_read_u16(state->in_h);
+        squark_cmd_t cmd = rio_read_u16(in_h);
         switch (cmd) {{
         } case SQUARK_CMD_BARRIER: {
             // Create a sync barrier with a specified id.
-            uint128_t sync_id = rio_read_u128(state->in_h);
+            uint128_t sync_id = rio_read_u128(in_h);
             server_heap_flip {
                 if (state->sq_cur.sync_ids == 0) {
                     // No existing barriers, start sync now.
@@ -152,14 +151,14 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
         } case SQUARK_CMD_SCAN: {
             // Request to scan data with a specific id.
             //x-dbg/ DBGFN("got scan op, reading op");
-            fstr_t map_id = fss(rio_read_fstr(state->in_h));
-            uint128_t request_id = rio_read_u128(state->in_h);
+            fstr_t map_id = fss(rio_read_fstr(in_h));
+            uint128_t request_id = rio_read_u128(in_h);
             qk_scan_op_t op;
-            rio_read_fill(state->in_h, FSTR_PACK(op));
+            rio_read_fill(in_h, FSTR_PACK(op));
             if (op.with_start)
-                op.key_start = fss(rio_read_fstr(state->in_h));
+                op.key_start = fss(rio_read_fstr(in_h));
             if (op.with_end)
-                op.key_end = fss(rio_read_fstr(state->in_h));
+                op.key_end = fss(rio_read_fstr(in_h));
             //x-dbg/ DBGFN("scan op read, executing");
             qk_map_ctx_t* map = resolve_map_ctx(state, map_id);
             // Execute scan.
@@ -177,9 +176,9 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
         } case SQUARK_CMD_UPSERT: {
         } case SQUARK_CMD_INSERT_IMM: {
             // Store/update an entry.
-            fstr_t map_id = fss(rio_read_fstr(state->in_h));
-            fstr_t key = fss(rio_read_fstr(state->in_h));
-            fstr_t value = fss(rio_read_fstr(state->in_h));
+            fstr_t map_id = fss(rio_read_fstr(in_h));
+            fstr_t key = fss(rio_read_fstr(in_h));
+            fstr_t value = fss(rio_read_fstr(in_h));
             qk_map_ctx_t* map = resolve_map_ctx(state, map_id);
             if (cmd == SQUARK_CMD_UPSERT) {
                 // Attempt to update.
@@ -215,12 +214,14 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
             break;
         } case SQUARK_CMD_PERFORM: {
             // Run abstract operation.
-            fstr_t arg = fss(rio_read_fstr(state->in_h));
+            fstr_t arg = fss(rio_read_fstr(in_h));
             squark_cb_perform(state->cb_ctx_ptr, arg);
+            // Assume all perform operations are dirty.
+            state->is_dirty = true;
             break;
         } case SQUARK_CMD_STATUS: {
             // Request to read status with a specific id.
-            uint128_t request_id = rio_read_u128(state->in_h);
+            uint128_t request_id = rio_read_u128(in_h);
             json_value_t stats = jobj_new();
             dict_foreach(state->maps, qk_map_ctx_t*, map_id, map) {
                 JSON_SET(stats, map_id, qk_get_stats(map));
@@ -234,16 +235,16 @@ join_locked(void) squark_read(join_server_params, sq_state_t* state) {
             throw(concs("unknown command! [", cmd, "]"), exception_fatal);
             break;
         }}
-        if (!rio_poll(state->in_h, true, false))
+        if (!rio_poll(in_h, true, false))
             return;
     }}
 }
 
-fiber_main squark_stdin_reader(fiber_main_attr, rcd_fid_t main_fid, rio_epoll_t* stdin_epoll) { try {
+fiber_main squark_stdin_reader(fiber_main_attr, rcd_fid_t main_fid, rio_t* in_h) { try {
     try {
         for (;;) {
-            rio_epoll_poll(stdin_epoll, true);
-            squark_read(main_fid);
+            rio_poll(in_h, true, true);
+            squark_read(in_h, main_fid);
         }
     } catch_eio (rio_eos, e) {
         // End of pipe stream means that parent closed and we will be terminated.
@@ -254,21 +255,16 @@ fiber_main squark_stdin_reader(fiber_main_attr, rcd_fid_t main_fid, rio_epoll_t*
 } catch (exception_desync, e); }
 
 void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
-    fstr_t arg0, db_path, target_ipp_arg;
-    if (!list_unpack(main_args, fstr_t, &arg0, &db_path, &target_ipp_arg))
+    fstr_t arg0, db_path;
+    if (!list_unpack(main_args, fstr_t, &arg0, &db_path))
         return;
     if (!fstr_equal(arg0, "squark"))
         return;
     try {
-        // Open acid handle.
+        // Open acid and quark handle.
         fstr_t data_path = concs(db_path, ".data");
         fstr_t journal_path = concs(db_path, ".journal");
         acid_h* ah = acid_open(data_path, journal_path, ACID_ADDR_0, 0);
-        // Configure squark and open it.
-        uint16_t target_ipp = fs2ui(target_ipp_arg);
-        qk_opt_t opt = {
-            .target_ipp = target_ipp,
-        };
         qk_ctx_t* qk = qk_open(ah);
         // Initialize state.
         sq_state_t* state = new(sq_state_t);
@@ -277,12 +273,12 @@ void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
         state->qk = qk;
         // Open in_h/out_h.
         // TODO: Perhaps use ib pipe for fast buffered out_h.
-        state->in_h = rio_stdin();
+        rio_t* in_h = rio_stdin();
         state->out_h = rio_stdout();
         // Read schema and open all maps.
         state->maps = new_dict(qk_map_ctx_t*);
         sub_heap_txn(heap) {
-            fstr_t jschema = fss(rio_read_fstr(state->in_h));
+            fstr_t jschema = fss(rio_read_fstr(in_h));
             json_value_t schema = json_parse(jschema)->value;
             JSON_OBJ_FOREACH(schema, map_key, map_cfg) {
                 qk_opt_t opt = {
@@ -297,9 +293,11 @@ void squark_main(list(fstr_t)* main_args, list(fstr_t)* main_env) {
         // Initialize callback context. This can leak all sorts of memory.
         state->cb_ctx_ptr = squark_cb_init_ctx(state->ah, state->qk, state->maps);
         // Spawn fiber that waits on in_h and reads.
+        // It would be raceful to use a system epoll as we already use the rio handle
+        // above to read the schema. We therefore import the in handle to the reader
+        // fiber and wait with a proper librcd rio poll instead.
         fmitosis {
-            rio_epoll_t* stdin_epoll = rio_epoll_create(state->in_h, rio_epoll_event_inlvl);
-            spawn_static_fiber(squark_stdin_reader("", rcd_self, stdin_epoll));
+            spawn_static_fiber(squark_stdin_reader("", rcd_self, import(in_h)));
         }
         for (;;) {
             // Accept asynchronous events (from file system or from stdin).
