@@ -135,7 +135,7 @@ fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts);
 /// When key have more or less parts than n_parts it throws an io exception.
 /// When key otherwise has invalid format the function throws an io exception as well.
 /// If an io exception is thrown the raw key could have been modified and has undefined content.
-void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t* out_parts);
+fstr_mem_t* qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t* out_parts);
 
 /// Counts the number of parts in a raw key.
 static inline size_t qk_key_count_parts(fstr_t raw_key) {

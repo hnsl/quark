@@ -1215,24 +1215,26 @@ fstr_mem_t* qk_compile_key(uint16_t n_parts, fstr_t* parts) { sub_heap {
 }}
 
 static void qk_decompile_next_part(size_t* i_part, size_t n_parts, fstr_t* out_parts, uint8_t* w_ptr, uint8_t* part_ptr) {
-    if (*i_part >= n_parts) {
-        throw("key had more parts than specified", exception_io);
+    if (*i_part >= n_parts) sub_heap {
+        throw(concs("key had more parts than specified (", n_parts, ")"), exception_io);
     }
     out_parts[*i_part].str = part_ptr;
     out_parts[*i_part].len = w_ptr - part_ptr;
     *i_part = *i_part + 1;
 }
 
-void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t* out_parts) {
+fstr_mem_t* qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t* out_parts) { sub_heap {
     if (n_parts == 0) {
         throw("invalid n_parts, cannot be zero", exception_arg);
     }
+    fstr_mem_t* key_mem = fstr_cpy(raw_key);
+    fstr_t key = fss(key_mem);
     size_t i_part = 0;
-    uint8_t* w_ptr = raw_key.str;
+    uint8_t* w_ptr = key.str;
     uint8_t* part_ptr = w_ptr;
     bool in_escape = false;
-    for (size_t i = 0; i < raw_key.len; i++) {
-        uint8_t chr = raw_key.str[i];
+    for (size_t i = 0; i < key.len; i++) {
+        uint8_t chr = key.str[i];
         if (in_escape) {
             if (chr == 0) {
                 qk_decompile_next_part(&i_part, n_parts, out_parts, w_ptr, part_ptr);
@@ -1255,7 +1257,8 @@ void qk_decompile_key(fstr_t raw_key, size_t n_parts, fstr_t* out_parts) {
         throw("key ended during escape sequence", exception_io);
     }
     qk_decompile_next_part(&i_part, n_parts, out_parts, w_ptr, part_ptr);
-    if (i_part != n_parts) {
-        throw("key had less parts than specified", exception_io);
+    if (i_part != n_parts) sub_heap {
+        throw(concs("key had less parts (", i_part, ") than specified (", n_parts, ")"), exception_io);
     }
-}
+    return escape(key_mem);
+}}
