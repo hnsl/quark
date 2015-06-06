@@ -24,6 +24,59 @@
         *key_ptrs[i] = keys[i]; \
 })
 
+#define _QUARK_SCAN(INIT_OP, KEY_NAME, VALUE_NAME, BAND_DECL_E, BAND_FREE_E, SCAN_E, BAND_REF_E) \
+    LET(qk_scan_op_t _op = INIT_OP) \
+    BAND_DECL_E \
+    LET(fstr_mem_t* _cur_start_key = 0) \
+    LET(uint64_t _count = 0, _total = 0, _limit = _op.limit) \
+    LET(fstr_t _last_key = {0}) \
+    LET(bool _eof = false) \
+    while ( ({ \
+        if (_last_key.str != 0) { \
+            /* copy start key from band to scan state */ \
+            lwt_alloc_free(_cur_start_key); \
+            _cur_start_key = fstr_cpy(_last_key); \
+            _last_key.str = 0; \
+            /* update operation to use new start key */ \
+            _op.key_start = fss(_cur_start_key); \
+            _op.with_start = true; \
+            _op.inc_start = false; \
+        } \
+        BAND_FREE_E; \
+        /* adjust limit. */ \
+        bool _count_end = false; \
+        if (_limit > 0) { \
+            if (_total >= _limit) { \
+                _count_end = true; \
+            } else { \
+                _op.limit = _limit - _total; \
+            } \
+        } \
+        if (_count_end || _eof) { \
+            /* full scan complete. */ \
+            lwt_alloc_free(_cur_start_key); \
+            break; \
+        } \
+        SCAN_E; \
+    }), true) \
+    LET(fstr_t _band_io = BAND_REF_E, KEY_NAME, VALUE_NAME) \
+    while ( ({ \
+        if (!qk_band_read(&_band_io, &KEY_NAME, &VALUE_NAME)) { \
+            /* segment scan complete. */ \
+            break; \
+        } \
+        _total++; \
+        _last_key = KEY_NAME; \
+    }), true)
+
+#define QUARK_SCAN(MCTX_EXPR, INIT_OP, KEY_NAME, VALUE_NAME, BAND) \
+    _QUARK_SCAN(INIT_OP, KEY_NAME, VALUE_NAME, \
+        LET(fstr_t _band), \
+        ((void) 0), \
+        (_band = (BAND), _count = qk_scan(MCTX_EXPR, _op, &_band, &_eof)), \
+        _band \
+    )
+
 /// Options for quark.
 typedef struct qk_opt {
     /// Tuning parameter: Target items per partition. Set to 0 to use the default
