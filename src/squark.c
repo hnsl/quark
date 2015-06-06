@@ -364,6 +364,17 @@ fiber_main squark_reader(fiber_main_attr, rio_t* in_h) { try {
     }
 } catch(exception_desync, e); }
 
+join_locked(void) squark_write(vec(fstr_t)* io_v, join_server_params, rio_t* out_h) { uninterruptible {
+    size_t len = vec_count(io_v, fstr_t);
+    vec_foreach(io_v, fstr_t, i, chunk) {
+        rio_write_part(out_h, chunk, i < (len - 1));
+    }
+}}
+
+fiber_main squark_writer(fiber_main_attr, rio_t* out_h) { try {
+    auto_accept_join(squark_write, join_server_params, out_h);
+} catch(exception_desync, e); }
+
 /// Watches a squark.
 fiber_main squark_watcher(fiber_main_attr, rio_proc_t* proc) { try {
     int32_t rcode = rio_proc_wait(proc);
@@ -396,9 +407,11 @@ squark_t* squark_spawn(fstr_t db_dir, fstr_t index_id, json_value_t schema, list
         sq->is_dirty = false;
         sq->heap = heap;
         sq->proc = import(proc_h);
-        sq->out_h = import(stdin_pipe_w);
         fmitosis {
             sq->reader = spawn_fiber(squark_reader("", import(stdout_pipe_r)));
+        }
+        fmitosis {
+            sq->writer = spawn_fiber(squark_writer("", import(stdin_pipe_w)));
         }
         fmitosis {
             sq->watcher = spawn_fiber(squark_watcher("", sq->proc));
@@ -427,43 +440,43 @@ fiber_main squark_barrier_fiber(fiber_main_attr, rcd_fid_t watcher_fid) { try {
     ifc_wait(watcher_fid);
 } catch (exception_desync, e); }
 
-rcd_fid_t squark_op_barrier(squark_t* sq) {
-    uninterruptible {
-        rcd_fid_t barrier_fid;
-        fmitosis {
-            rcd_fid_t watcher_fid = sfid(sq->watcher);
-            barrier_fid = spawn_static_fiber(squark_barrier_fiber("", watcher_fid));
-        }
-        rio_write_u16(sq->out_h, SQUARK_CMD_BARRIER, true);
-        rio_write_u128(sq->out_h, barrier_fid, false);
-        return barrier_fid;
+rcd_fid_t squark_op_barrier(squark_t* sq) { sub_heap {
+    rcd_fid_t barrier_fid;
+    fmitosis {
+        rcd_fid_t watcher_fid = sfid(sq->watcher);
+        barrier_fid = spawn_static_fiber(squark_barrier_fiber("", watcher_fid));
     }
-}
+    vec(fstr_t)* io_v = new_vec(fstr_t);
+    rio_iov_write_u16(io_v, SQUARK_CMD_BARRIER);
+    rio_iov_write_u128(io_v, barrier_fid);
+    squark_write(io_v, sfid(sq->writer));
+    return barrier_fid;
+}}
 
-void squark_op_insert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) {
-    uninterruptible {
-        rio_write_u16(sq->out_h, SQUARK_CMD_INSERT_IMM, true);
-        rio_write_fstr(sq->out_h, map_id);
-        rio_write_fstr(sq->out_h, key);
-        rio_write_fstr(sq->out_h, value);
-    }
-}
+void squark_op_insert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) { sub_heap {
+    vec(fstr_t)* io_v = new_vec(fstr_t);
+    rio_iov_write_u16(io_v, SQUARK_CMD_INSERT_IMM);
+    rio_iov_write_fstr(io_v, map_id);
+    rio_iov_write_fstr(io_v, key);
+    rio_iov_write_fstr(io_v, value);
+    squark_write(io_v, sfid(sq->writer));
+}}
 
-void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) {
-    uninterruptible {
-        rio_write_u16(sq->out_h, SQUARK_CMD_UPSERT, true);
-        rio_write_fstr(sq->out_h, map_id);
-        rio_write_fstr(sq->out_h, key);
-        rio_write_fstr(sq->out_h, value);
-    }
-}
+void squark_op_upsert(squark_t* sq, fstr_t map_id, fstr_t key, fstr_t value) { sub_heap {
+    vec(fstr_t)* io_v = new_vec(fstr_t);
+    rio_iov_write_u16(io_v, SQUARK_CMD_UPSERT);
+    rio_iov_write_fstr(io_v, map_id);
+    rio_iov_write_fstr(io_v, key);
+    rio_iov_write_fstr(io_v, value);
+    squark_write(io_v, sfid(sq->writer));
+}}
 
-void squark_op_perform(squark_t* sq, fstr_t op_arg) {
-    uninterruptible {
-        rio_write_u16(sq->out_h, SQUARK_CMD_PERFORM, true);
-        rio_write_fstr(sq->out_h, op_arg);
-    }
-}
+void squark_op_perform(squark_t* sq, fstr_t op_arg) { sub_heap {
+    vec(fstr_t)* io_v = new_vec(fstr_t);
+    rio_iov_write_u16(io_v, SQUARK_CMD_PERFORM);
+    rio_iov_write_fstr(io_v, op_arg);
+    squark_write(io_v, sfid(sq->writer));
+}}
 
 join_locked(fstr_mem_t*) get_status_res(join_server_params, fstr_mem_t* status_res) {
     return import(status_res);
@@ -476,9 +489,13 @@ fiber_main status_op_fiber(fiber_main_attr) { try {
 } catch (exception_desync, e); }
 
 rcd_sub_fiber_t* squark_op_status(squark_t* sq) {
-    uninterruptible fmitosis {
-        rio_write_u16(sq->out_h, SQUARK_CMD_STATUS, true);
-        rio_write_u128(sq->out_h, new_fid, false);
+    fmitosis {
+        sub_heap {
+            vec(fstr_t)* io_v = new_vec(fstr_t);
+            rio_iov_write_u16(io_v, SQUARK_CMD_STATUS);
+            rio_iov_write_u128(io_v, new_fid);
+            squark_write(io_v, sfid(sq->writer));
+        }
         return spawn_fiber(status_op_fiber(""));
     }
 }
@@ -507,19 +524,23 @@ fiber_main scan_op_fiber(fiber_main_attr) { try {
 } catch (exception_desync, e); }
 
 rcd_sub_fiber_t* squark_op_scan(squark_t* sq, fstr_t map_id, qk_scan_op_t op) {
-    uninterruptible fmitosis {
+    fmitosis {
         // We could design this so the scan op fiber does the write asynchronously instead
         // but it's not necessary because deadlock is impossible anyway as the reader is never
         // really blocking on anything. Scan results are already passed asynchronously back.
-        rio_write_u16(sq->out_h, SQUARK_CMD_SCAN, true);
-        rio_write_fstr(sq->out_h, map_id);
-        rio_write_u128(sq->out_h, new_fid, true);
-        rio_write(sq->out_h, FSTR_PACK(op));
-        if (op.with_start)
-            rio_write_fstr(sq->out_h, op.key_start);
-        if (op.with_end)
-            rio_write_fstr(sq->out_h, op.key_end);
-        //x-dbg/ DBGFN("written scan op");
+        sub_heap {
+            vec(fstr_t)* io_v = new_vec(fstr_t);
+            rio_iov_write_u16(io_v, SQUARK_CMD_SCAN);
+            rio_iov_write_fstr(io_v, map_id);
+            rio_iov_write_u128(io_v, new_fid);
+            vec_append(io_v, fstr_t, FSTR_PACK(op));
+            if (op.with_start)
+                rio_iov_write_fstr(io_v, op.key_start);
+            if (op.with_end)
+                rio_iov_write_fstr(io_v, op.key_end);
+            //x-dbg/ DBGFN("written scan op");
+            squark_write(io_v, sfid(sq->writer));
+        }
         return spawn_fiber(scan_op_fiber(""));
     }
 }

@@ -19,8 +19,8 @@ typedef struct squark {
     bool is_dirty;
     lwt_heap_t* heap;
     rio_proc_t* proc;
-    rio_t* out_h;
     rcd_sub_fiber_t* reader;
+    rcd_sub_fiber_t* writer;
     rcd_sub_fiber_t* watcher;
 } squark_t;
 
