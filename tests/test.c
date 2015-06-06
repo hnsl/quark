@@ -807,8 +807,7 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
 
         json_value_t stats = qk_get_stats(map);
         uint64_t total_alloc = 0;
-        uint64_t i_lvl = 0;
-        JSON_ARR_FOREACH(JSON_REF(stats, "levels"), level) {
+        JSON_ARR_FOREACH(JSON_REF(stats, "levels"), i_lvl, level) {
             if (i_lvl == 0) {
                 uint64_t count = jnumv(JSON_REF(level, "ent_count"));
                 if (ent_seq != count) {
@@ -819,7 +818,6 @@ static void test_128g(fstr_t db_path, bool scan) { sub_heap {
                 }
             }
             total_alloc += jnumv(JSON_REF(level, "total_alloc_b"));
-            i_lvl++;
         }
         rio_debug(concs("allocated [", (total_alloc / 1024 / 1024), "/",
             (target_bytes / 1024 / 1024), "] MiB, total snapshots: [", total_snaps, "]\n"));
