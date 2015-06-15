@@ -181,21 +181,16 @@ join_locked(void) squark_read(rio_t* in_h, join_server_params, sq_state_t* state
             fstr_t value = fss(rio_read_fstr(in_h));
             qk_map_ctx_t* map = resolve_map_ctx(state, map_id);
             if (cmd == SQUARK_CMD_UPSERT) {
-                // Attempt to update.
                 //x-dbg/ DBGFN("update: [", key, "] => [", value, "]");
-                if (qk_update(map, key, value)) {
+                if (qk_upsert(map, key, value)) {
                     state->is_dirty = true;
-                    break;
+                }
+            } else {
+                if (qk_insert(map, key, value)) {
+                    state->is_dirty = true;
                 }
             }
             //x-dbg/ DBGFN("insert: [", key, "] => [", value, "]");
-            bool insert_ok = qk_insert(map, key, value);
-            if (!insert_ok) {
-                if (cmd == SQUARK_CMD_UPSERT)
-                    throw("insert conflict after update failure", exception_fatal);
-            } else {
-                state->is_dirty = true;
-            }
 
             /*
             if (!insert_ok) {
