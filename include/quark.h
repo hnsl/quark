@@ -69,11 +69,11 @@
         _last_key = KEY_NAME; \
     }), true)
 
-#define QUARK_SCAN(MCTX_EXPR, INIT_OP, KEY_NAME, VALUE_NAME, BAND) \
+#define QUARK_SCAN(MCTX_EXPR, INIT_OP, KEY_NAME, VALUE_NAME, SCAN_BUF) \
     _QUARK_SCAN(INIT_OP, KEY_NAME, VALUE_NAME, \
         LET(fstr_t _band), \
         ((void) 0), \
-        (_band = (BAND), _count = qk_scan(MCTX_EXPR, _op, &_band, &_eof)), \
+        (_band = (SCAN_BUF), _count = qk_scan(MCTX_EXPR, _op, &_band, &_eof)), \
         _band \
     )
 
