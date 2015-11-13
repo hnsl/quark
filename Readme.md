@@ -1,6 +1,8 @@
 # quark
 Storage engine for minimimal databases.
 
+Licence: Public domain
+
 ## Intention
 We often found ourselves needing a datastore that has tunable durability, great
 write performance, great range scan performance and with great interface to our
