@@ -11,11 +11,6 @@ worst case for tree-based indexes. The closest solution we found was Cassandra,
 but it features a client heavy protocol to implement in librcd and it's runtime
 stability does not seem to be all that.
 
-Also we do not need to update or delete data. All we care about is insert and
-lookup, since our problem is so limited we decided that it is probably cheaper
-to build a minimal datastore that does exactly than what we want than interface
-with someone elses.
-
 ## Tunable Durability
 We use the "acid memory" implementation in librcd to get an interface that looks
 like mmap:ed files that have performant and known durability by two-phase
@@ -41,9 +36,9 @@ bottom layer is the data layer, this layer is the only one that has every key
 inserted. It also contains the value associated with the key.
 
 ### Partitions
-A partition is a continuous block of memory, they are at least one page large.
+A partition is a continuous block of memory. 
 Partitions form doubly linked lists for all levels. The partitions are only a
-supportive structure to the nodes to make disk access efficient. They have
+supportive structure to the nodes to make disk access efficient.
 
 ### Nodes
 In an ordinary skip-list the nodes would more or less be the data structure.
